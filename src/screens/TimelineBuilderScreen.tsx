@@ -1,0 +1,99 @@
+import React, { useState } from 'react';
+import { useProject } from '../context/ProjectContext';
+import { Container } from '../components/layout/Container';
+import { Header } from '../components/layout/Header';
+import { Button } from '../components/ui/Button';
+import { BeatCard } from '../components/BeatCard';
+import type { Beat } from '../types/story';
+
+export default function TimelineBuilderScreen() {
+  const { state, dispatch } = useProject();
+  const [expandedBeat, setExpandedBeat] = useState<number | null>(1);
+
+  if (!state.currentProject) {
+    return null;
+  }
+
+  const beats = state.currentProject.timeline.beats;
+  const completedBeats = beats.filter(b => b.status === 'complete').length;
+  const completeness = Math.round((completedBeats / beats.length) * 100);
+
+  const handleUpdateBeat = (beatNumber: number, updates: Partial<Beat>) => {
+    dispatch({
+      type: 'UPDATE_BEAT',
+      payload: { beatNumber, beat: updates },
+    });
+  };
+
+  const handleToggleExpand = (beatNumber: number) => {
+    setExpandedBeat(expandedBeat === beatNumber ? null : beatNumber);
+  };
+
+  const handleContinue = () => {
+    if (completeness >= 50) {
+      dispatch({ type: 'SET_SCREEN', payload: 'what-next' });
+    }
+  };
+
+  const handleExpandStory = () => {
+    dispatch({ type: 'SET_SCREEN', payload: 'expand-story' });
+  };
+
+  return (
+    <Container maxWidth="2xl">
+      <Header
+        title="Your Story Timeline"
+        subtitle={`${completedBeats} of 12 beats complete (${completeness}%)`}
+      />
+
+      <div className="mb-6 bg-slate-800/40 rounded-lg p-4 backdrop-blur-sm border border-white/10">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-slate-300">Story Progress</span>
+          <span className="text-sm font-bold text-cosmic-400">{completeness}%</span>
+        </div>
+        <div className="w-full bg-slate-700 rounded-full h-2">
+          <div
+            className="bg-gradient-to-r from-cosmic-600 to-cosmic-400 h-2 rounded-full transition-all duration-500"
+            style={{ width: `${completeness}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="space-y-4 mb-8">
+        {beats.map((beat) => (
+          <BeatCard
+            key={beat.id}
+            beat={beat}
+            storyBible={state.currentProject!.storyBible}
+            previousBeats={beats.slice(0, beat.number - 1).filter(b => b.status === 'complete')}
+            onUpdate={(updates) => handleUpdateBeat(beat.number, updates)}
+            isExpanded={expandedBeat === beat.number}
+            onToggleExpand={() => handleToggleExpand(beat.number)}
+          />
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-3 sticky bottom-4 bg-slate-900/90 backdrop-blur-sm rounded-xl p-4 border border-white/10">
+        <div className="flex gap-3">
+          <Button
+            variant="outline"
+            onClick={handleExpandStory}
+            fullWidth
+          >
+            💡 Expand Your Story
+          </Button>
+          <Button
+            onClick={handleContinue}
+            disabled={completeness < 50}
+            fullWidth
+          >
+            {completeness >= 50 ? 'Continue →' : `Complete ${Math.ceil((50 - completeness) / 8.33)} more beats`}
+          </Button>
+        </div>
+        <p className="text-xs text-center text-slate-400">
+          Complete at least 6 beats to continue
+        </p>
+      </div>
+    </Container>
+  );
+}

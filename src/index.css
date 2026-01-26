@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cosmic-50: #f5f3ff;
+  --color-cosmic-100: #ede9fe;
+  --color-cosmic-200: #ddd6fe;
+  --color-cosmic-300: #c4b5fd;
+  --color-cosmic-400: #a78bfa;
+  --color-cosmic-500: #8b5cf6;
+  --color-cosmic-600: #7c3aed;
+  --color-cosmic-700: #6d28d9;
+  --color-cosmic-800: #5b21b6;
+  --color-cosmic-900: #4c1d95;
+  --color-cosmic-950: #2e1065;
+}
+
+@layer base {
+  body {
+    background: linear-gradient(to bottom right, rgb(15 23 42), rgb(88 28 135), rgb(15 23 42));
+    color: white;
+    min-height: 100vh;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+}
