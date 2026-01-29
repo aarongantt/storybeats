@@ -41,6 +41,39 @@ class OpenAIService {
   }
 
   /**
+   * Test if the API key is valid and has proper permissions
+   */
+  async testApiKey(): Promise<{ valid: boolean; error?: string }> {
+    try {
+      const client = this.ensureClient();
+
+      // Make a minimal API call to test the key
+      await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'test' }],
+        max_tokens: 5,
+      });
+
+      return { valid: true };
+    } catch (error: any) {
+      console.error('API key test failed:', error);
+
+      // Parse OpenAI error messages
+      if (error?.status === 401) {
+        return { valid: false, error: 'Invalid API key. Please check your key and try again.' };
+      } else if (error?.status === 429) {
+        return { valid: false, error: 'Rate limit exceeded or insufficient credits. Please check your OpenAI account billing.' };
+      } else if (error?.status === 403) {
+        return { valid: false, error: 'This API key does not have access to GPT-4o. Please check your OpenAI account permissions.' };
+      } else if (error?.message?.includes('billing')) {
+        return { valid: false, error: 'Billing issue detected. Please add payment method to your OpenAI account at platform.openai.com/account/billing' };
+      } else {
+        return { valid: false, error: `API error: ${error?.message || 'Unknown error. Please verify your API key and account status.'}` };
+      }
+    }
+  }
+
+  /**
    * Extract Story Bible data from initial user input
    */
   async extractStoryBible(initialInput: string): Promise<Partial<StoryBible>> {

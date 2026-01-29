@@ -15,6 +15,7 @@ export function ApiKeySetup({ onComplete }: ApiKeySetupProps) {
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [existingKey, setExistingKey] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     const saved = storageService.getApiKey();
@@ -24,7 +25,7 @@ export function ApiKeySetup({ onComplete }: ApiKeySetupProps) {
     }
   }, []);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!apiKey.trim()) {
       setError('Please enter an API key');
       return;
@@ -35,8 +36,22 @@ export function ApiKeySetup({ onComplete }: ApiKeySetupProps) {
       return;
     }
 
-    storageService.saveApiKey(apiKey);
+    setTesting(true);
+    setError('');
+
+    // Initialize and test the API key
     openaiService.initialize(apiKey);
+    const testResult = await openaiService.testApiKey();
+
+    if (!testResult.valid) {
+      setTesting(false);
+      setError(testResult.error || 'API key validation failed');
+      return;
+    }
+
+    // Key is valid, save it
+    storageService.saveApiKey(apiKey);
+    setTesting(false);
     onComplete();
   };
 
@@ -104,8 +119,8 @@ export function ApiKeySetup({ onComplete }: ApiKeySetupProps) {
         />
 
         <div className="mt-6 space-y-3">
-          <Button onClick={handleSave} fullWidth size="lg">
-            Save and Continue
+          <Button onClick={handleSave} fullWidth size="lg" disabled={testing}>
+            {testing ? 'Validating API Key...' : 'Save and Continue'}
           </Button>
 
           <p className="text-xs text-slate-500 text-center">
