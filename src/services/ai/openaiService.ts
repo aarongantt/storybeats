@@ -4,8 +4,11 @@ import type {
   Question,
   Beat,
   BeatNumber,
+  BeatTitle,
   PitchPackage,
   QuestionHistory,
+  EmotionalTone,
+  Character,
 } from '../../types/story';
 
 interface TokenUsageCallback {
@@ -71,6 +74,59 @@ class OpenAIService {
         return { valid: false, error: `API error: ${error?.message || 'Unknown error. Please verify your API key and account status.'}` };
       }
     }
+  }
+
+  /**
+   * Extract semantic intent from a question to detect duplicates
+   */
+  private extractQuestionIntent(question: string): string {
+    const normalized = question.toLowerCase()
+      .replace(/[?!.,]/g, '')
+      .replace(/your|the|a|an/g, '')
+      .trim();
+
+    const intents = [
+      { pattern: /protagonist.*name|name.*protagonist|who is your/i, key: 'protagonist_name' },
+      { pattern: /occupation|job|does.*living|profession/i, key: 'protagonist_occupation' },
+      { pattern: /afraid|fear/i, key: 'protagonist_fears' },
+      { pattern: /antagonist|opposes|against|villain/i, key: 'antagonist_identity' },
+      { pattern: /conflict|problem|challenge/i, key: 'main_conflict' },
+      { pattern: /setting|place|where.*take place|world/i, key: 'world_setting' },
+      { pattern: /race|ethnicity/i, key: 'race' },
+      { pattern: /age|old/i, key: 'age' },
+      { pattern: /appearance|looks like|physical/i, key: 'appearance' },
+      { pattern: /want|desire|goal/i, key: 'protagonist_goal' },
+      { pattern: /relationship|friend|family/i, key: 'relationships' },
+      { pattern: /stakes|risk|lose/i, key: 'stakes' },
+    ];
+
+    for (const intent of intents) {
+      if (intent.pattern.test(question)) {
+        return intent.key;
+      }
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Check if a question is a semantic duplicate of previous questions
+   */
+  private isQuestionDuplicate(
+    newQuestion: string,
+    questionHistory: QuestionHistory[]
+  ): boolean {
+    const newIntent = this.extractQuestionIntent(newQuestion);
+
+    for (const hist of questionHistory) {
+      const oldIntent = this.extractQuestionIntent(hist.question);
+      if (newIntent === oldIntent) {
+        console.log(`Duplicate detected: "${newQuestion}" matches intent "${newIntent}"`);
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -140,7 +196,46 @@ Be THOROUGH. Extract even small details. Better to capture too much than too lit
     const questionCount = questionHistory.length;
     if (questionCount >= 10) return null;
 
+    // Try up to 3 times to generate a non-duplicate question
+    const MAX_ATTEMPTS = 3;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const question = await this._generateSingleQuestion(client, currentBible, questionHistory);
+
+      if (!question) {
+        return null;
+      }
+
+      // Check for duplication
+      if (!this.isQuestionDuplicate(question.text, questionHistory)) {
+        return question;
+      }
+
+      console.log(`Attempt ${attempt + 1}: Question was duplicate, regenerating...`);
+    }
+
+    console.log('Failed to generate non-duplicate question after 3 attempts');
+    return null;
+  }
+
+  /**
+   * Internal method to generate a single question from AI
+   */
+  private async _generateSingleQuestion(
+    client: OpenAI,
+    currentBible: Partial<StoryBible>,
+    questionHistory: QuestionHistory[]
+  ): Promise<Question | null> {
     const prompt = `You are conducting an adaptive story interview. Generate the NEXT SINGLE QUESTION to ask.
+
+CONTEXTUAL QUESTION RULES (CRITICAL):
+- ONLY ask about race/ethnicity if the story's theme or conflict explicitly involves identity, discrimination, or cultural heritage
+- ONLY ask about physical appearance if it's plot-relevant (e.g., mistaken identity, disguise, doppelganger)
+- ONLY ask about age if it matters to the story (coming-of-age, generational conflict, age-based discrimination)
+- ONLY ask about location details if the setting is central to the plot
+- Focus on PLOT-RELEVANT questions: motivations, conflicts, relationships, stakes, character goals
+- Prioritize EMOTIONAL and CHARACTER questions over demographic details
+- NEVER ask demographic questions just for completeness
 
 CURRENT STORY BIBLE:
 ${JSON.stringify(currentBible, null, 2)}
@@ -191,30 +286,35 @@ Return JSON in this format:
 
 If you have COMPLETE protagonist details (name, description, goal, occupation/background, fears/motivations), complete conflict info, and antagonist info, return null.`;
 
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-      temperature: 0.8,
-    });
+    try {
+      const response = await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+        temperature: 0.5,
+      });
 
-    this.trackTokens('Generate Question', response.usage);
+      this.trackTokens('Generate Question', response.usage);
 
-    const content = response.choices[0].message.content;
-    if (!content) return null;
+      const content = response.choices[0].message.content;
+      if (!content) return null;
 
-    const data = JSON.parse(content);
-    if (!data.question) return null;
+      const data = JSON.parse(content);
+      if (!data.question) return null;
 
-    return {
-      id: `q-${Date.now()}`,
-      text: data.question,
-      presentationMode: data.presentationMode || 'free-form',
-      chipOptions: data.chipOptions || undefined,
-      allowSurpriseMe: data.allowSurpriseMe || false,
-      allowSkip: true,
-      targeting: data.targeting || '',
-    };
+      return {
+        id: `q-${Date.now()}`,
+        text: data.question,
+        presentationMode: data.presentationMode || 'free-form',
+        chipOptions: data.chipOptions || undefined,
+        allowSurpriseMe: data.allowSurpriseMe || false,
+        allowSkip: true,
+        targeting: data.targeting || '',
+      };
+    } catch (error) {
+      console.error('Error generating question:', error);
+      return null;
+    }
   }
 
   /**
@@ -279,7 +379,7 @@ Return a JSON object with ONLY the fields that should be updated or added. Use t
 
   /**
    * Generate multiple AI answer options for "Give me an idea!"
-   * Returns 3 options: Neutral, Negative, Positive
+   * Returns 4 options: Neutral, Negative, Positive, Wild Card
    */
   async generateAIAnswerOptions(
     question: Question,
@@ -287,17 +387,18 @@ Return a JSON object with ONLY the fields that should be updated or added. Use t
   ): Promise<string[]> {
     const client = this.ensureClient();
 
-    const prompt = `You are helping a user develop their story. Generate 3 creative answer options for this question with different tones.
+    const prompt = `You are helping a user develop their story. Generate 4 creative answer options for this question with different tones.
 
 QUESTION: ${question.text}
 
 CURRENT STORY CONTEXT:
 ${JSON.stringify(storyBible, null, 2)}
 
-Generate EXACTLY 3 answer options with different tones:
+Generate EXACTLY 4 answer options with different tones:
 1. NEUTRAL: Balanced, straightforward, middle-ground answer
 2. NEGATIVE: Darker, more conflicted, challenging answer that adds complications
 3. POSITIVE: Lighter, more hopeful, optimistic answer
+4. WILD-CARD: Unexpected twist, surprising direction, game-changer
 
 All options should:
 - Fit the existing story context
@@ -308,32 +409,34 @@ Return JSON with labeled options:
 {
   "neutral": "answer text",
   "negative": "answer text",
-  "positive": "answer text"
+  "positive": "answer text",
+  "wildCard": "answer text"
 }`;
 
     const response = await client.chat.completions.create({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
-      temperature: 0.9,
+      temperature: 0.7,
     });
 
     this.trackTokens('Generate AI Answer Options', response.usage);
 
     const content = response.choices[0].message.content;
-    const data = content ? JSON.parse(content) : { neutral: '', negative: '', positive: '' };
+    const data = content ? JSON.parse(content) : { neutral: '', negative: '', positive: '', wildCard: '' };
 
-    // Return in order: Neutral, Negative, Positive
+    // Return in order: Neutral, Negative, Positive, Wild Card
     return [
       data.neutral || '',
       data.negative || '',
-      data.positive || ''
+      data.positive || '',
+      data.wildCard || ''
     ].filter(s => s.length > 0);
   }
 
   /**
    * Generate a beat summary using Story Bible context
-   * Returns 3 options: Neutral, Negative, Positive
+   * Returns 4 options: Neutral, Negative, Positive, Wild Card
    */
   async generateBeatWithContext(
     beatNumber: BeatNumber,
@@ -342,6 +445,9 @@ Return JSON with labeled options:
     previousBeats: Beat[]
   ): Promise<string[]> {
     const client = this.ensureClient();
+
+    const mainCharacter = storyBible.characters?.[0] || storyBible.protagonist;
+    const antagonist = storyBible.characters?.find(c => c.role === 'antagonist');
 
     const prompt = `You are creating Beat #${beatNumber}: "${beatTitle}" for a story outline.
 
@@ -354,43 +460,46 @@ PREVIOUS BEATS:
 ${previousBeats.map(b => `Beat ${b.number}: ${b.summary}`).join('\n\n')}
 
 MANDATORY REQUIREMENTS:
-1. Use the EXACT protagonist from the Story Bible (name: ${storyBible.protagonist?.name || 'the protagonist'})
+1. Use the EXACT protagonist from the Story Bible (name: ${mainCharacter?.name || 'the protagonist'})
 2. Use the EXACT setting/world described: ${storyBible.world?.setting || 'the world'}
 3. Incorporate the main conflict: ${storyBible.conflict?.mainConflict || 'the conflict'}
-4. Reference the antagonist if present: ${storyBible.conflict?.antagonist || 'the antagonist'}
+4. Reference the antagonist if present: ${antagonist?.name || storyBible.conflict?.antagonist || 'the antagonist'}
 5. If theme is specified (${storyBible.theme}), reflect it in the beat
 6. Flow naturally from previous beats
 7. Each alternative must be EXACTLY ONE SENTENCE (not 2-3)
 
-Generate EXACTLY 3 options with different tones:
+Generate EXACTLY 4 options with different tones:
 1. NEUTRAL: Balanced, straightforward progression
 2. NEGATIVE: Things go wrong, setbacks, complications, darker turn
 3. POSITIVE: Things go well, progress, hope, lighter turn
+4. WILD-CARD: Unexpected twist, surprise direction, game-changer
 
 Return JSON with labeled options:
 {
   "neutral": "one sentence summary",
   "negative": "one sentence summary",
-  "positive": "one sentence summary"
+  "positive": "one sentence summary",
+  "wildCard": "one sentence summary"
 }`;
 
     const response = await client.chat.completions.create({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
-      temperature: 0.9,
+      temperature: 0.7,
     });
 
     this.trackTokens('Generate Beat', response.usage);
 
     const content = response.choices[0].message.content;
-    const data = content ? JSON.parse(content) : { neutral: '', negative: '', positive: '' };
+    const data = content ? JSON.parse(content) : { neutral: '', negative: '', positive: '', wildCard: '' };
 
-    // Return in order: Neutral, Negative, Positive
+    // Return in order: Neutral, Negative, Positive, Wild Card
     return [
       data.neutral || '',
       data.negative || '',
-      data.positive || ''
+      data.positive || '',
+      data.wildCard || ''
     ].filter(s => s.length > 0);
   }
 
@@ -528,6 +637,123 @@ Return JSON with beat numbers as keys:
     }
 
     return result;
+  }
+
+  /**
+   * Calculate emotional intensity and tension for a beat
+   */
+  async calculateEmotionalIntensity(
+    beatSummary: string,
+    selectedTone: EmotionalTone,
+    beatNumber: BeatNumber,
+    beatTitle: BeatTitle
+  ): Promise<{ intensity: number; tension: number }> {
+    const client = this.ensureClient();
+
+    const prompt = `Analyze this story beat and determine its emotional intensity and dramatic tension.
+
+BEAT #${beatNumber}: "${beatTitle}"
+SUMMARY: ${beatSummary}
+SELECTED TONE: ${selectedTone}
+
+Return JSON:
+{
+  "intensity": <number from -10 to +10>,
+  "tension": <number from 0 to 10>
+}
+
+GUIDELINES:
+- intensity is about emotional valence (good vs bad feelings)
+  * -10 = darkest/most tragic/hopeless
+  * 0 = neutral/balanced
+  * +10 = most hopeful/uplifting/triumphant
+- tension is about dramatic stakes (calm vs high-stakes)
+  * 0 = calm, peaceful, no conflict
+  * 5 = moderate stakes/conflict
+  * 10 = maximum conflict/life-or-death stakes
+- A scene can be positive but high tension (winning after struggle)
+- A scene can be negative but low tension (quiet sadness)
+- Wild-card beats tend to have unexpected intensity/tension patterns`;
+
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,  // Low temp for consistent scoring
+    });
+
+    this.trackTokens('Calculate Emotional Intensity', response.usage);
+
+    const content = response.choices[0].message.content;
+    const data = content ? JSON.parse(content) : { intensity: 0, tension: 5 };
+
+    return {
+      intensity: Math.max(-10, Math.min(10, data.intensity || 0)),
+      tension: Math.max(0, Math.min(10, data.tension || 5)),
+    };
+  }
+
+  /**
+   * Extract character hierarchy from Story Bible and question history
+   */
+  async extractCharacterHierarchy(
+    storyBible: Partial<StoryBible>,
+    questionHistory: QuestionHistory[]
+  ): Promise<Character[]> {
+    const client = this.ensureClient();
+
+    const prompt = `Analyze the story information and identify character hierarchy.
+
+STORY BIBLE:
+${JSON.stringify(storyBible, null, 2)}
+
+QUESTION HISTORY:
+${questionHistory.map(q => `Q: ${q.question}\nA: ${q.answer}`).join('\n\n')}
+
+Identify:
+1. MAIN CHARACTER (protagonist) - the central character whose journey we follow
+2. SUPPORTING CHARACTERS (allies, mentors, sidekicks, friends, family)
+3. ANTAGONIST (villain, opposing force, primary obstacle)
+
+For EACH character, extract:
+- name: Character's name
+- wants: What they consciously desire/pursue
+- weaknesses: Their flaws, vulnerabilities, blind spots
+- description, occupation, fears, etc. if mentioned
+
+Return JSON with a "characters" array:
+{
+  "characters": [
+    {
+      "id": "main-1",
+      "role": "main",
+      "name": "...",
+      "wants": "...",
+      "weaknesses": "...",
+      "description": "...",
+      "occupation": "...",
+      "fears": "...",
+      "motivations": "...",
+      "personality": "..."
+    }
+  ]
+}
+
+Include ALL characters mentioned, even if information is incomplete.`;
+
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.5,
+    });
+
+    this.trackTokens('Extract Character Hierarchy', response.usage);
+
+    const content = response.choices[0].message.content;
+    const data = content ? JSON.parse(content) : { characters: [] };
+
+    return data.characters || [];
   }
 }
 

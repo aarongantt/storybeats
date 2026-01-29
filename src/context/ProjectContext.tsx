@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import type { Project, Beat, StoryBible, Question, QuestionHistory } from '../types/story';
+import type { Project, Beat, StoryBible, Question, QuestionHistory, CharacterRole } from '../types/story';
 import { storageService } from '../services/storage/localStorageService';
 import { BeatTitle } from '../types/story';
 
@@ -30,7 +30,57 @@ function deepMergeStoryBible(
 ): StoryBible {
   const merged: StoryBible = { ...current };
 
-  // Merge protagonist object deeply
+  // MIGRATION: Convert old protagonist to characters array if needed
+  if (!merged.characters && merged.protagonist) {
+    merged.characters = [{
+      id: 'main-char-1',
+      role: 'main' as CharacterRole,
+      name: merged.protagonist.name,
+      description: merged.protagonist.description,
+      wants: merged.protagonist.want,
+      weaknesses: merged.protagonist.fears,
+      needs: merged.protagonist.need,
+      occupation: merged.protagonist.occupation,
+      background: merged.protagonist.background,
+      fears: merged.protagonist.fears,
+      motivations: merged.protagonist.motivations,
+      personality: merged.protagonist.personality,
+    }];
+  }
+
+  // Merge characters array intelligently
+  if (updates.characters) {
+    const existingChars = merged.characters || [];
+    const updatedChars = updates.characters;
+
+    const mergedChars = [...existingChars];
+
+    for (const newChar of updatedChars) {
+      const existingIndex = mergedChars.findIndex(c =>
+        c.id === newChar.id ||
+        (c.role === newChar.role && c.role !== 'supporting') // Match main/antagonist by role
+      );
+
+      if (existingIndex >= 0) {
+        // Deep merge existing character
+        mergedChars[existingIndex] = {
+          ...mergedChars[existingIndex],
+          ...newChar,
+          // Preserve non-empty fields from existing
+          name: newChar.name || mergedChars[existingIndex].name,
+          wants: newChar.wants || mergedChars[existingIndex].wants,
+          weaknesses: newChar.weaknesses || mergedChars[existingIndex].weaknesses,
+        };
+      } else {
+        // Add new character
+        mergedChars.push(newChar);
+      }
+    }
+
+    merged.characters = mergedChars;
+  }
+
+  // Keep old protagonist merging for backward compatibility
   if (updates.protagonist) {
     merged.protagonist = {
       ...current.protagonist,

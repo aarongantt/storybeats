@@ -10,27 +10,27 @@ export interface BeatDefinition {
 export const BEAT_DEFINITIONS: BeatDefinition[] = [
   {
     number: 1,
-    title: BeatTitle.WhereWeBegin,
-    description: "Establish protagonist's world before change",
-    promptHint: "Where does the story start? Who is this person before everything changes?"
+    title: BeatTitle.MeetTheMainCharacter,
+    description: "Introduce the protagonist and their identity",
+    promptHint: "Who is your main character? Show them in their element before change comes."
   },
   {
     number: 2,
-    title: BeatTitle.WhatTheyWant,
-    description: "Protagonist's initial goal/desire",
-    promptHint: "What does your protagonist want? What are they trying to achieve?"
+    title: BeatTitle.TheCharactersWorld,
+    description: "Establish their normal world, relationships, routine",
+    promptHint: "What is their everyday life like? What's their status quo?"
   },
   {
     number: 3,
-    title: BeatTitle.TheWorldAroundThem,
-    description: "Setting, rules, stakes",
-    promptHint: "What's the world around them? What rules, tensions, or obstacles exist?"
+    title: BeatTitle.TheCatalyst,
+    description: "The inciting incident that disrupts everything",
+    promptHint: "What event forces them out of their comfort zone?"
   },
   {
     number: 4,
-    title: BeatTitle.SomethingGoesWrong,
-    description: "Inciting incident, catalyst",
-    promptHint: "What goes wrong? What disrupts their world and forces them to act?"
+    title: BeatTitle.TheDrivingConflict,
+    description: "The central problem they must face",
+    promptHint: "What is the core challenge or quest they must take on?"
   },
   {
     number: 5,

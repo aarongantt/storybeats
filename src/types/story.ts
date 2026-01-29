@@ -9,10 +9,10 @@ export type BeatStatus = 'empty' | 'incomplete' | 'complete';
 export type BeatSource = 'user' | 'ai' | 'ai-with-context';
 
 export enum BeatTitle {
-  WhereWeBegin = "Where We Begin",
-  WhatTheyWant = "What They Want",
-  TheWorldAroundThem = "The World Around Them",
-  SomethingGoesWrong = "Something Goes Wrong",
+  MeetTheMainCharacter = "Meet the Main Character",
+  TheCharactersWorld = "The Character's World",
+  TheCatalyst = "The Catalyst",
+  TheDrivingConflict = "The Driving Conflict",
   AHardChoice = "A Hard Choice",
   CrossingTheLine = "Crossing the Line",
   ThingsGetMessy = "Things Get Messy",
@@ -26,9 +26,53 @@ export enum BeatTitle {
 export type OpeningFrameType = 'none' | 'prologue' | 'cold-open' | 'flash-forward' | 'in-media-res' | 'myth-legend';
 export type ClosingFrameType = 'none' | 'epilogue' | 'journey-back' | 'one-year-later' | 'final-image' | 'twist-ending';
 
+// Character hierarchy types
+export type CharacterRole = 'main' | 'supporting' | 'antagonist';
+
+export interface Character {
+  id: string;
+  role: CharacterRole;
+  name?: string;
+  description?: string;
+  wants?: string;          // What they consciously desire
+  weaknesses?: string;     // Their flaws/vulnerabilities
+  needs?: string;          // What they actually need (may differ from wants)
+  occupation?: string;
+  background?: string;
+  fears?: string;
+  motivations?: string;
+  personality?: string;
+  relationshipToMain?: string; // For supporting/antagonist only
+}
+
+// Emotional intensity tracking
+export type EmotionalTone = 'neutral' | 'negative' | 'positive' | 'wild-card';
+
+export interface EmotionalDataPoint {
+  beatNumber: BeatNumber;
+  intensity: number;       // -10 to +10 scale (negative to positive)
+  tension: number;         // 0 to 10 scale (how much conflict/stakes)
+  tone: EmotionalTone;     // Which option user selected
+  timestamp: string;
+}
+
+// Story health metrics
+export interface StoryHealth {
+  overallTension: number;           // 0-10 average tension
+  emotionalVariety: number;         // 0-10 how much variety in tones
+  arcConsistency: number;           // 0-10 how smooth the emotional flow
+  hasProperBeginning: boolean;      // Does it start with "meet main character"
+  hasClimacticMoment: boolean;      // Peak tension exists
+  recommendations: string[];        // AI-generated suggestions
+}
+
 // Lightweight Story Bible (Level 1)
 export interface StoryBible {
-  protagonist: {
+  // NEW: Character hierarchy (main/supporting/antagonist)
+  characters?: Character[];
+
+  // DEPRECATED: Keep for backward compatibility - will be migrated to characters array
+  protagonist?: {
     name?: string;
     description?: string;
     goal?: string;
@@ -71,6 +115,9 @@ export interface Beat {
   locked: boolean;
   status: BeatStatus;
   alternativeVersions: string[]; // AI suggestions history
+  // NEW: Emotional tracking
+  emotionalData?: EmotionalDataPoint;
+  selectedTone?: EmotionalTone;
   metadata: {
     createdAt: string;
     updatedAt: string;
@@ -90,6 +137,7 @@ export interface Timeline {
   beats: Beat[]; // always 12
   closingFrame?: Frame;
   completeness: number; // 0-100
+  storyHealth?: StoryHealth;  // NEW: Story health metrics
 }
 
 export interface PitchPackage {

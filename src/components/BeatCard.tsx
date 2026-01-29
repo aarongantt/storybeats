@@ -3,7 +3,7 @@ import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { TextArea } from './ui/Input';
 import { openaiService } from '../services/ai/openaiService';
-import type { Beat, StoryBible, BeatNumber } from '../types/story';
+import type { Beat, StoryBible, BeatNumber, EmotionalTone, EmotionalDataPoint } from '../types/story';
 
 interface BeatCardProps {
   beat: Beat;
@@ -73,18 +73,57 @@ export function BeatCard({
     }
   };
 
-  const handleSelectAlternative = (alternative: string) => {
-    onUpdate({
-      summary: alternative,
-      userWritten: false,
-      status: 'complete',
-      metadata: {
-        ...beat.metadata,
-        updatedAt: new Date().toISOString(),
-        source: 'ai-with-context',
-      },
-      alternativeVersions: [...(beat.alternativeVersions || []), alternative],
-    });
+  const handleSelectAlternative = async (alternative: string, index: number) => {
+    const tones: EmotionalTone[] = ['neutral', 'negative', 'positive', 'wild-card'];
+    const selectedTone = tones[index];
+
+    // Calculate emotional intensity for this beat
+    try {
+      const emotionalMetrics = await openaiService.calculateEmotionalIntensity(
+        alternative,
+        selectedTone,
+        beat.number as BeatNumber,
+        beat.title
+      );
+
+      const emotionalData: EmotionalDataPoint = {
+        beatNumber: beat.number as BeatNumber,
+        intensity: emotionalMetrics.intensity,
+        tension: emotionalMetrics.tension,
+        tone: selectedTone,
+        timestamp: new Date().toISOString(),
+      };
+
+      onUpdate({
+        summary: alternative,
+        userWritten: false,
+        status: 'complete',
+        selectedTone,
+        emotionalData,
+        metadata: {
+          ...beat.metadata,
+          updatedAt: new Date().toISOString(),
+          source: 'ai-with-context',
+        },
+        alternativeVersions: [...(beat.alternativeVersions || []), alternative],
+      });
+    } catch (error) {
+      console.error('Failed to calculate emotional intensity:', error);
+      // Still update beat, just without emotional data
+      onUpdate({
+        summary: alternative,
+        userWritten: false,
+        status: 'complete',
+        selectedTone,
+        metadata: {
+          ...beat.metadata,
+          updatedAt: new Date().toISOString(),
+          source: 'ai-with-context',
+        },
+        alternativeVersions: [...(beat.alternativeVersions || []), alternative],
+      });
+    }
+
     setShowAlternatives(false);
     setAlternatives([]);
   };
@@ -177,8 +216,8 @@ export function BeatCard({
             <div className="space-y-3">
               <h4 className="font-medium text-cosmic-300">Choose a version:</h4>
               {alternatives.map((alt, idx) => {
-                const labels = ['Neutral', 'Negative', 'Positive'];
-                const colors = ['bg-slate-600', 'bg-red-600', 'bg-green-600'];
+                const labels = ['Neutral', 'Negative', 'Positive', 'Wild Card'];
+                const colors = ['bg-slate-600', 'bg-red-600', 'bg-green-600', 'bg-purple-600'];
                 const label = labels[idx] || `Option ${idx + 1}`;
                 const colorClass = colors[idx] || 'bg-cosmic-600';
 
@@ -186,7 +225,7 @@ export function BeatCard({
                   <Card
                     key={idx}
                     hover
-                    onClick={() => handleSelectAlternative(alt)}
+                    onClick={() => handleSelectAlternative(alt, idx)}
                     className="cursor-pointer p-4"
                   >
                     <div className="flex items-start gap-3">

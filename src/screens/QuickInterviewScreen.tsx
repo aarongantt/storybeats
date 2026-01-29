@@ -48,8 +48,26 @@ export default function QuickInterviewScreen() {
       if (question) {
         dispatch({ type: 'SET_QUESTION', payload: question });
       } else {
-        // No more questions needed - validate Story Bible before moving forward
+        // No more questions needed - extract character hierarchy and validate Story Bible
         if (validateStoryBible()) {
+          // Extract character hierarchy before moving to timeline
+          try {
+            const characters = await openaiService.extractCharacterHierarchy(
+              state.currentProject.storyBible,
+              state.questionHistory
+            );
+
+            if (characters.length > 0) {
+              dispatch({
+                type: 'UPDATE_STORY_BIBLE',
+                payload: { characters }
+              });
+            }
+          } catch (error) {
+            console.error('Failed to extract character hierarchy:', error);
+            // Continue anyway - not critical
+          }
+
           dispatch({ type: 'SET_SCREEN', payload: 'timeline-builder' });
         } else {
           // Story Bible incomplete - generate one more question
@@ -223,8 +241,8 @@ export default function QuickInterviewScreen() {
             <div className="space-y-3">
               <p className="text-sm text-slate-300 mb-3">Choose an option or type your own:</p>
               {aiOptions.map((option, index) => {
-                const labels = ['Neutral', 'Negative', 'Positive'];
-                const colors = ['bg-slate-600', 'bg-red-600', 'bg-green-600'];
+                const labels = ['Neutral', 'Negative', 'Positive', 'Wild Card'];
+                const colors = ['bg-slate-600', 'bg-red-600', 'bg-green-600', 'bg-purple-600'];
                 const label = labels[index] || `Option ${index + 1}`;
                 const colorClass = colors[index] || 'bg-cosmic-600';
 
