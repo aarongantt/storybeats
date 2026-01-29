@@ -4,7 +4,10 @@ import { Container } from '../components/layout/Container';
 import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { StoryHeartbeat } from '../components/StoryHeartbeat';
+import { StoryHealthPanel } from '../components/StoryHealthPanel';
 import { openaiService } from '../services/ai/openaiService';
+import { calculateStoryHealth } from '../utils/storyHealth';
 import type { PitchPackage } from '../types/story';
 
 export default function PitchGeneratorScreen() {
@@ -52,6 +55,11 @@ export default function PitchGeneratorScreen() {
   const handleBack = () => {
     dispatch({ type: 'SET_SCREEN', payload: 'what-next' });
   };
+
+  // Calculate story health for display
+  const storyHealth = state.currentProject
+    ? calculateStoryHealth(state.currentProject.timeline.beats)
+    : null;
 
   const renderContent = () => {
     if (!pitch) return null;
@@ -139,6 +147,18 @@ export default function PitchGeneratorScreen() {
               </p>
             </div>
           </Card>
+
+          {/* Story Heartbeat and Health */}
+          {storyHealth && (
+            <div className="space-y-6 mt-8">
+              <StoryHeartbeat
+                beats={state.currentProject!.timeline.beats}
+                onBeatClick={() => {}} // No navigation on pitch screen
+                className="mb-6"
+              />
+              <StoryHealthPanel health={storyHealth} />
+            </div>
+          )}
 
           <div className="flex gap-3">
             <Button variant="ghost" onClick={handleBack}>

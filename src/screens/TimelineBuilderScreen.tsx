@@ -1,16 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useProject } from '../context/ProjectContext';
 import { Container } from '../components/layout/Container';
 import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
 import { BeatCard } from '../components/BeatCard';
+import { StoryHeartbeat } from '../components/StoryHeartbeat';
+import { StoryHealthPanel } from '../components/StoryHealthPanel';
 import { openaiService } from '../services/ai/openaiService';
-import type { Beat } from '../types/story';
+import { calculateStoryHealth } from '../utils/storyHealth';
+import type { Beat, StoryHealth } from '../types/story';
 
 export default function TimelineBuilderScreen() {
   const { state, dispatch } = useProject();
   const [expandedBeat, setExpandedBeat] = useState<number | null>(1);
   const [autoCompleting, setAutoCompleting] = useState(false);
+  const [storyHealth, setStoryHealth] = useState<StoryHealth | null>(null);
+
+  // Calculate story health when beats change
+  useEffect(() => {
+    if (state.currentProject) {
+      const health = calculateStoryHealth(state.currentProject.timeline.beats);
+      setStoryHealth(health);
+    }
+  }, [state.currentProject?.timeline.beats]);
 
   if (!state.currentProject) {
     return null;
@@ -99,19 +111,41 @@ export default function TimelineBuilderScreen() {
         </div>
       </div>
 
+      {/* Story Heartbeat Graph */}
+      {storyHealth && (
+        <StoryHeartbeat
+          beats={beats}
+          onBeatClick={(beatNumber) => {
+            setExpandedBeat(beatNumber);
+            const element = document.getElementById(`beat-${beatNumber}`);
+            if (element) {
+              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }}
+          highlightedBeat={expandedBeat || undefined}
+          className="mb-6"
+        />
+      )}
+
       <div className="space-y-4 mb-8">
         {beats.map((beat) => (
-          <BeatCard
-            key={beat.id}
-            beat={beat}
-            storyBible={state.currentProject!.storyBible}
-            previousBeats={beats.slice(0, beat.number - 1).filter(b => b.status === 'complete')}
-            onUpdate={(updates) => handleUpdateBeat(beat.number, updates)}
-            isExpanded={expandedBeat === beat.number}
-            onToggleExpand={() => handleToggleExpand(beat.number)}
-          />
+          <div key={beat.id} id={`beat-${beat.number}`}>
+            <BeatCard
+              beat={beat}
+              storyBible={state.currentProject!.storyBible}
+              previousBeats={beats.slice(0, beat.number - 1).filter(b => b.status === 'complete')}
+              onUpdate={(updates) => handleUpdateBeat(beat.number, updates)}
+              isExpanded={expandedBeat === beat.number}
+              onToggleExpand={() => handleToggleExpand(beat.number)}
+            />
+          </div>
         ))}
       </div>
+
+      {/* Story Health Panel */}
+      {storyHealth && completeness >= 50 && (
+        <StoryHealthPanel health={storyHealth} className="mb-6" />
+      )}
 
       <div className="flex flex-col gap-3 sticky bottom-4 bg-slate-900/90 backdrop-blur-sm rounded-xl p-4 border border-white/10">
         {completeness < 100 && (

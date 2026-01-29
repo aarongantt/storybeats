@@ -56,6 +56,21 @@ function App() {
     window.location.reload();
   };
 
+  const handleStartNewStory = () => {
+    if (!window.confirm('Start a new story? Your current project will be saved.')) {
+      return;
+    }
+
+    // Save current project first
+    if (state.currentProject) {
+      storageService.saveProject(state.currentProject);
+    }
+
+    // Create new project
+    dispatch({ type: 'CREATE_PROJECT', payload: {} });
+    dispatch({ type: 'SET_SCREEN', payload: 'welcome' });
+  };
+
   if (!apiKeyConfigured) {
     return <ApiKeySetup onComplete={() => setApiKeyConfigured(true)} />;
   }
@@ -101,6 +116,16 @@ function App() {
         </svg>
         <span className="text-sm font-medium">Reset</span>
       </button>
+
+      {/* Start New Story button - top right */}
+      {apiKeyConfigured && state.currentProject && (
+        <button
+          onClick={handleStartNewStory}
+          className="fixed top-4 right-4 bg-cosmic-600/90 hover:bg-cosmic-500/90 text-white px-4 py-2 rounded-lg shadow-lg z-[100] transition-colors text-sm font-medium"
+        >
+          + Start New Story
+        </button>
+      )}
 
       {/* Main Content - adjusted for debug panels */}
       <div className="pl-80 pr-80">

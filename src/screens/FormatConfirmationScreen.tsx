@@ -29,6 +29,14 @@ const GENRE_OPTIONS = [
   { label: 'Mystery', value: 'Mystery' },
   { label: 'Action', value: 'Action' },
   { label: 'Adventure', value: 'Adventure' },
+  { label: 'Western', value: 'Western' },
+  { label: 'Crime', value: 'Crime' },
+  { label: 'Historical', value: 'Historical' },
+  { label: 'Supernatural', value: 'Supernatural' },
+  { label: 'Coming-of-Age', value: 'Coming-of-Age' },
+  { label: 'Psychological', value: 'Psychological' },
+  { label: 'Sports', value: 'Sports' },
+  { label: 'Musical', value: 'Musical' },
 ];
 
 const TONE_OPTIONS = [
@@ -40,6 +48,12 @@ const TONE_OPTIONS = [
   { label: 'Gritty', value: 'Gritty' },
   { label: 'Whimsical', value: 'Whimsical' },
   { label: 'Suspenseful', value: 'Suspenseful' },
+  { label: 'Satirical', value: 'Satirical' },
+  { label: 'Melancholic', value: 'Melancholic' },
+  { label: 'Inspirational', value: 'Inspirational' },
+  { label: 'Cynical', value: 'Cynical' },
+  { label: 'Mysterious', value: 'Mysterious' },
+  { label: 'Intense', value: 'Intense' },
 ];
 
 export default function FormatConfirmationScreen() {
