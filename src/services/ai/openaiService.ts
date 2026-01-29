@@ -86,18 +86,39 @@ class OpenAIService {
       .trim();
 
     const intents = [
-      { pattern: /protagonist.*name|name.*protagonist|who is your/i, key: 'protagonist_name' },
-      { pattern: /occupation|job|does.*living|profession/i, key: 'protagonist_occupation' },
-      { pattern: /afraid|fear/i, key: 'protagonist_fears' },
-      { pattern: /antagonist|opposes|against|villain/i, key: 'antagonist_identity' },
-      { pattern: /conflict|problem|challenge/i, key: 'main_conflict' },
-      { pattern: /setting|place|where.*take place|world/i, key: 'world_setting' },
-      { pattern: /race|ethnicity/i, key: 'race' },
-      { pattern: /age|old/i, key: 'age' },
-      { pattern: /appearance|looks like|physical/i, key: 'appearance' },
-      { pattern: /want|desire|goal/i, key: 'protagonist_goal' },
-      { pattern: /relationship|friend|family/i, key: 'relationships' },
-      { pattern: /stakes|risk|lose/i, key: 'stakes' },
+      // Protagonist identity questions (MUST BE FIRST - most specific)
+      { pattern: /who is.*protagonist|protagonist.*who|tell me about.*protagonist|describe.*protagonist|protagonist.*describe|protagonist.*name|name.*protagonist|main character.*who|who.*main character/i, key: 'protagonist_identity' },
+
+      // Specific protagonist details
+      { pattern: /occupation|job|does.*living|profession|what does.*do for/i, key: 'protagonist_occupation' },
+      { pattern: /afraid|fear|scared/i, key: 'protagonist_fears' },
+      { pattern: /drives|motivates|motivation|why do they want|why does.*want/i, key: 'protagonist_motivation' },
+      { pattern: /want|desire.*achieve|goal.*achieve|achieve|aspire/i, key: 'protagonist_goal' },
+      { pattern: /appearance|looks like|physical.*description/i, key: 'protagonist_appearance' },
+      { pattern: /personality|character traits|kind of person/i, key: 'protagonist_personality' },
+
+      // Antagonist
+      { pattern: /antagonist|opposes|against|villain|enemy|standing in.*way|who.*opposes/i, key: 'antagonist_identity' },
+
+      // Conflict
+      { pattern: /conflict|problem|challenge|main.*issue|central.*struggle/i, key: 'main_conflict' },
+
+      // World/Setting
+      { pattern: /setting|place|where.*take place|world.*like|location/i, key: 'world_setting' },
+      { pattern: /world.*unique|world.*special|rules.*world|how.*world work/i, key: 'world_rules' },
+
+      // Demographics (should rarely match due to contextual rules)
+      { pattern: /race|ethnicity/i, key: 'demographics_race' },
+      { pattern: /age|old|years old/i, key: 'demographics_age' },
+
+      // Relationships
+      { pattern: /relationship|friend|family|important people|close to/i, key: 'relationships' },
+
+      // Stakes
+      { pattern: /stakes|risk|lose|happens if.*fail|consequence/i, key: 'stakes' },
+
+      // Secondary characters
+      { pattern: /other character|secondary character|supporting character|anyone else/i, key: 'secondary_characters' },
     ];
 
     for (const intent of intents) {
@@ -117,12 +138,38 @@ class OpenAIService {
     questionHistory: QuestionHistory[]
   ): boolean {
     const newIntent = this.extractQuestionIntent(newQuestion);
+    const newQuestionNormalized = newQuestion.toLowerCase()
+      .replace(/[?!.,]/g, '')
+      .replace(/your|the|a|an|is|are|does|do|can|you/g, '')
+      .trim();
 
     for (const hist of questionHistory) {
       const oldIntent = this.extractQuestionIntent(hist.question);
+
+      // Check 1: Same semantic intent
       if (newIntent === oldIntent) {
-        console.log(`Duplicate detected: "${newQuestion}" matches intent "${newIntent}"`);
+        console.log(`Duplicate detected: "${newQuestion}" matches intent "${newIntent}" with previous question "${hist.question}"`);
         return true;
+      }
+
+      // Check 2: High text similarity (checking if questions are too similar)
+      const oldQuestionNormalized = hist.question.toLowerCase()
+        .replace(/[?!.,]/g, '')
+        .replace(/your|the|a|an|is|are|does|do|can|you/g, '')
+        .trim();
+
+      // If normalized questions share >70% of significant words, likely duplicate
+      const newWords = new Set(newQuestionNormalized.split(/\s+/).filter(w => w.length > 3));
+      const oldWords = new Set(oldQuestionNormalized.split(/\s+/).filter(w => w.length > 3));
+
+      if (newWords.size > 0 && oldWords.size > 0) {
+        const intersection = new Set([...newWords].filter(x => oldWords.has(x)));
+        const similarity = intersection.size / Math.min(newWords.size, oldWords.size);
+
+        if (similarity > 0.7) {
+          console.log(`Duplicate detected: "${newQuestion}" has ${Math.round(similarity * 100)}% similarity with "${hist.question}"`);
+          return true;
+        }
       }
     }
 
@@ -228,6 +275,13 @@ Be THOROUGH. Extract even small details. Better to capture too much than too lit
   ): Promise<Question | null> {
     const prompt = `You are conducting an adaptive story interview. Generate the NEXT SINGLE QUESTION to ask.
 
+ANTI-DUPLICATION RULES (MOST CRITICAL):
+⚠️ NEVER ask questions that are semantically similar to ones already asked
+⚠️ Review ALL previous questions before generating a new one
+⚠️ If you've asked "Who is your protagonist?" DO NOT ask "Can you describe your protagonist?" or "Tell me about your protagonist" - these are DUPLICATES
+⚠️ If you've asked about the protagonist's identity, move on to SPECIFIC details: occupation, fears, motivations
+⚠️ If you've asked about the main conflict, DO NOT rephrase it - move to a different topic
+
 CONTEXTUAL QUESTION RULES (CRITICAL):
 - ONLY ask about race/ethnicity if the story's theme or conflict explicitly involves identity, discrimination, or cultural heritage
 - ONLY ask about physical appearance if it's plot-relevant (e.g., mistaken identity, disguise, doppelganger)
@@ -246,12 +300,14 @@ ${questionHistory.map(q => `Q: ${q.question}\nA: ${q.answer}`).join('\n\n')}
 QUESTION PRIORITY SYSTEM (ask in this order):
 
 TIER 1 - CORE PROTAGONIST DETAILS (ask these first):
-- If no protagonist.name: "Who is your protagonist?" or "What is your protagonist's name?"
-- If no protagonist.description: "Can you describe your protagonist?" (appearance, personality, background)
-- If no protagonist.goal: "What does your protagonist want to achieve?"
-- If protagonist.name exists but missing occupation: "What does [name] do for a living?" or "What is [name]'s occupation?"
-- If protagonist exists but missing fears: "What is your protagonist most afraid of?"
-- If protagonist exists but missing deeper motivations: "What drives your protagonist?" or "Why do they want this?"
+⚠️ Ask ONLY ONE question about protagonist identity, then move to specific details
+- If protagonist is completely unknown: "Who is your protagonist?" (ONLY ASK THIS ONCE)
+- If you have basic protagonist info, ask SPECIFIC follow-ups:
+  * Missing occupation: "What does [name] do for a living?"
+  * Missing goal: "What does [name] want to achieve?"
+  * Missing fears: "What is [name] most afraid of?"
+  * Missing motivation: "What drives [name]?"
+⚠️ DO NOT ask "Can you describe your protagonist?" if you already asked "Who is your protagonist?" - these are DUPLICATES
 
 TIER 2 - CONFLICT & ANTAGONIST:
 - If no conflict.mainConflict: "What is the main problem or challenge in your story?"
