@@ -286,7 +286,7 @@ export default function QuickInterviewScreen() {
                   disabled={loading}
                   fullWidth
                 >
-                  ✨ Surprise Me (AI will answer)
+                  ✨ Give me an idea! (AI will answer)
                 </Button>
               )}
             </>

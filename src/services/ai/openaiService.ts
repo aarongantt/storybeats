@@ -278,7 +278,7 @@ Return a JSON object with ONLY the fields that should be updated or added. Use t
   }
 
   /**
-   * Generate multiple AI answer options for "Surprise Me"
+   * Generate multiple AI answer options for "Give me an idea!"
    * Returns 3 options: Neutral, Negative, Positive
    */
   async generateAIAnswerOptions(

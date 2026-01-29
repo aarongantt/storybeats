@@ -97,7 +97,7 @@ Try at least 2 different story types:
 - [ ] Questions appear one at a time
 - [ ] Questions are relevant to your story
 - [ ] Can type custom answers
-- [ ] "Surprise Me" button generates AI answer options
+- [ ] "Give me an idea!" button generates AI answer options
 - [ ] Can select from AI answer chips
 - [ ] "Skip" button works
 - [ ] "Continue to Timeline" appears after enough questions
@@ -121,7 +121,7 @@ Try at least 2 different story types:
 - [ ] Progress bar shows completion percentage
 - [ ] Each beat card can expand/collapse
 - [ ] "Write It" button lets you manually write a beat
-- [ ] "Surprise Me" generates AI alternatives (3-5 options)
+- [ ] "Give me an idea!" generates AI alternatives (3-5 options)
 - [ ] Can select from AI alternatives
 - [ ] Can edit beat summary directly
 - [ ] "Clear" button removes beat content

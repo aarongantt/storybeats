@@ -265,7 +265,7 @@ export function BeatCard({
                   disabled={loading}
                   fullWidth
                 >
-                  {loading ? 'Generating...' : '✨ Surprise Me (AI)'}
+                  {loading ? 'Generating...' : '✨ Give me an idea! (AI)'}
                 </Button>
                 <Button variant="ghost" onClick={handleSkip} fullWidth>
                   ⏭ Skip for Now
