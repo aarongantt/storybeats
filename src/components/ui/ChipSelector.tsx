@@ -47,6 +47,12 @@ export function ChipSelector({
     }
   };
 
+  // Get all option values for comparison
+  const optionValues = options.map(o => o.value);
+
+  // Find custom values that are selected but not in options
+  const customSelectedValues = selected.filter(val => !optionValues.includes(val));
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
@@ -66,6 +72,17 @@ export function ChipSelector({
             </button>
           );
         })}
+
+        {/* Render custom selected values */}
+        {customSelectedValues.map((customValue) => (
+          <button
+            key={customValue}
+            onClick={() => handleChipClick(customValue)}
+            className="px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 bg-cosmic-600 text-white shadow-lg scale-105"
+          >
+            {customValue}
+          </button>
+        ))}
 
         {allowCustom && !showCustomInput && (
           <button
