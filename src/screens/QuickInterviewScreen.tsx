@@ -222,16 +222,28 @@ export default function QuickInterviewScreen() {
           {aiOptions.length > 0 ? (
             <div className="space-y-3">
               <p className="text-sm text-slate-300 mb-3">Choose an option or type your own:</p>
-              {aiOptions.map((option, index) => (
-                <button
-                  key={index}
-                  onClick={() => handleSelectAiOption(option)}
-                  disabled={loading}
-                  className="w-full text-left p-4 bg-slate-800/40 hover:bg-slate-700/60 border border-white/10 hover:border-cosmic-500/50 rounded-lg transition-all disabled:opacity-50"
-                >
-                  <p className="text-white">{option}</p>
-                </button>
-              ))}
+              {aiOptions.map((option, index) => {
+                const labels = ['Neutral', 'Negative', 'Positive'];
+                const colors = ['bg-slate-600', 'bg-red-600', 'bg-green-600'];
+                const label = labels[index] || `Option ${index + 1}`;
+                const colorClass = colors[index] || 'bg-cosmic-600';
+
+                return (
+                  <button
+                    key={index}
+                    onClick={() => handleSelectAiOption(option)}
+                    disabled={loading}
+                    className="w-full text-left p-4 bg-slate-800/40 hover:bg-slate-700/60 border border-white/10 hover:border-cosmic-500/50 rounded-lg transition-all disabled:opacity-50"
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={`${colorClass} text-white text-xs font-bold px-2 py-1 rounded flex-shrink-0`}>
+                        {label}
+                      </span>
+                      <p className="text-white flex-1">{option}</p>
+                    </div>
+                  </button>
+                );
+              })}
               <Button
                 variant="ghost"
                 onClick={() => setAiOptions([])}

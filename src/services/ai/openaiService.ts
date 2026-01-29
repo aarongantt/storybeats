@@ -279,6 +279,7 @@ Return a JSON object with ONLY the fields that should be updated or added. Use t
 
   /**
    * Generate multiple AI answer options for "Surprise Me"
+   * Returns 3 options: Neutral, Negative, Positive
    */
   async generateAIAnswerOptions(
     question: Question,
@@ -286,19 +287,28 @@ Return a JSON object with ONLY the fields that should be updated or added. Use t
   ): Promise<string[]> {
     const client = this.ensureClient();
 
-    const prompt = `You are helping a user develop their story. Generate 3-5 creative answer options for this question.
+    const prompt = `You are helping a user develop their story. Generate 3 creative answer options for this question with different tones.
 
 QUESTION: ${question.text}
 
 CURRENT STORY CONTEXT:
 ${JSON.stringify(storyBible, null, 2)}
 
-Generate 3-5 different creative answers that fit the existing story context. Each should be distinct and interesting.
-Keep each answer concise (1-2 sentences).
+Generate EXACTLY 3 answer options with different tones:
+1. NEUTRAL: Balanced, straightforward, middle-ground answer
+2. NEGATIVE: Darker, more conflicted, challenging answer that adds complications
+3. POSITIVE: Lighter, more hopeful, optimistic answer
 
-Return JSON:
+All options should:
+- Fit the existing story context
+- Be concise (1-2 sentences)
+- Be distinct and interesting
+
+Return JSON with labeled options:
 {
-  "options": ["answer 1", "answer 2", "answer 3"]
+  "neutral": "answer text",
+  "negative": "answer text",
+  "positive": "answer text"
 }`;
 
     const response = await client.chat.completions.create({
@@ -311,12 +321,19 @@ Return JSON:
     this.trackTokens('Generate AI Answer Options', response.usage);
 
     const content = response.choices[0].message.content;
-    const data = content ? JSON.parse(content) : { options: [] };
-    return data.options || [];
+    const data = content ? JSON.parse(content) : { neutral: '', negative: '', positive: '' };
+
+    // Return in order: Neutral, Negative, Positive
+    return [
+      data.neutral || '',
+      data.negative || '',
+      data.positive || ''
+    ].filter(s => s.length > 0);
   }
 
   /**
    * Generate a beat summary using Story Bible context
+   * Returns 3 options: Neutral, Negative, Positive
    */
   async generateBeatWithContext(
     beatNumber: BeatNumber,
@@ -343,13 +360,18 @@ MANDATORY REQUIREMENTS:
 4. Reference the antagonist if present: ${storyBible.conflict?.antagonist || 'the antagonist'}
 5. If theme is specified (${storyBible.theme}), reflect it in the beat
 6. Flow naturally from previous beats
-7. Each alternative should be 2-3 sentences
+7. Each alternative must be EXACTLY ONE SENTENCE (not 2-3)
 
-Generate 3-5 SPECIFIC alternative beat summaries that use the protagonist's name, the actual setting, and the real conflict from your Story Bible.
+Generate EXACTLY 3 options with different tones:
+1. NEUTRAL: Balanced, straightforward progression
+2. NEGATIVE: Things go wrong, setbacks, complications, darker turn
+3. POSITIVE: Things go well, progress, hope, lighter turn
 
-Return JSON:
+Return JSON with labeled options:
 {
-  "alternatives": ["summary 1", "summary 2", "summary 3"]
+  "neutral": "one sentence summary",
+  "negative": "one sentence summary",
+  "positive": "one sentence summary"
 }`;
 
     const response = await client.chat.completions.create({
@@ -362,8 +384,14 @@ Return JSON:
     this.trackTokens('Generate Beat', response.usage);
 
     const content = response.choices[0].message.content;
-    const data = content ? JSON.parse(content) : { alternatives: [] };
-    return data.alternatives || [];
+    const data = content ? JSON.parse(content) : { neutral: '', negative: '', positive: '' };
+
+    // Return in order: Neutral, Negative, Positive
+    return [
+      data.neutral || '',
+      data.negative || '',
+      data.positive || ''
+    ].filter(s => s.length > 0);
   }
 
   /**
@@ -431,6 +459,75 @@ Return JSON:
       numberedOutline: data.numberedOutline || '',
       createdAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Auto-complete all empty beats at once
+   * Uses neutral tone for a balanced story
+   */
+  async autoCompleteBeats(
+    beats: Beat[],
+    storyBible: StoryBible
+  ): Promise<Record<number, string>> {
+    const client = this.ensureClient();
+
+    // Find all empty beats
+    const emptyBeats = beats.filter(b => !b.summary || b.status === 'empty');
+    if (emptyBeats.length === 0) {
+      return {};
+    }
+
+    // Get already completed beats for context
+    const completedBeats = beats.filter(b => b.summary && b.status === 'complete');
+
+    const prompt = `You are auto-completing a story outline. Generate ONE SENTENCE for each empty beat using NEUTRAL tone (balanced, straightforward).
+
+COMPLETE STORY BIBLE:
+${JSON.stringify(storyBible, null, 2)}
+
+ALREADY COMPLETED BEATS (for context):
+${completedBeats.map(b => `Beat ${b.number}: ${b.summary}`).join('\n')}
+
+BEATS TO COMPLETE:
+${emptyBeats.map(b => `Beat ${b.number}: ${b.title}`).join('\n')}
+
+MANDATORY REQUIREMENTS:
+1. Use the EXACT protagonist name: ${storyBible.protagonist?.name || 'the protagonist'}
+2. Use the EXACT setting: ${storyBible.world?.setting || 'the world'}
+3. Incorporate the conflict: ${storyBible.conflict?.mainConflict || 'the conflict'}
+4. Each beat must be EXACTLY ONE SENTENCE
+5. Use NEUTRAL tone (not too positive or negative, balanced)
+6. Flow naturally from completed beats
+
+Return JSON with beat numbers as keys:
+{
+  "1": "one sentence summary",
+  "5": "one sentence summary",
+  "12": "one sentence summary"
+}`;
+
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
+    });
+
+    this.trackTokens('Auto-Complete Beats', response.usage);
+
+    const content = response.choices[0].message.content;
+    const data = content ? JSON.parse(content) : {};
+
+    // Convert string keys to numbers
+    const result: Record<number, string> = {};
+    for (const [key, value] of Object.entries(data)) {
+      const beatNumber = parseInt(key);
+      if (typeof value === 'string' && value.trim()) {
+        result[beatNumber] = value.trim();
+      }
+    }
+
+    return result;
   }
 }
 

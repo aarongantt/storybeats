@@ -147,15 +147,17 @@ export function BeatCard({
     >
       <div className="flex items-start justify-between mb-4">
         <div className="flex-1 cursor-pointer" onClick={onToggleExpand}>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-cosmic-400">Beat {beat.number}</span>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg font-bold text-cosmic-400">Beat {beat.number}</span>
             {beat.locked && <span className="text-xs">🔒</span>}
             {beat.status === 'complete' && !beat.locked && <span className="text-xs">✓</span>}
             {beat.status === 'incomplete' && <span className="text-xs">⏭</span>}
           </div>
-          <h3 className="font-semibold text-lg mt-1">{beat.title}</h3>
           {!isExpanded && beat.summary && (
-            <p className="text-sm text-slate-400 mt-1 line-clamp-2">{beat.summary}</p>
+            <p className="text-sm text-slate-300 mt-1 line-clamp-2">{beat.summary}</p>
+          )}
+          {!isExpanded && !beat.summary && (
+            <p className="text-sm text-slate-500 italic mt-1">{beat.title}</p>
           )}
         </div>
 
@@ -174,16 +176,28 @@ export function BeatCard({
           {showAlternatives ? (
             <div className="space-y-3">
               <h4 className="font-medium text-cosmic-300">Choose a version:</h4>
-              {alternatives.map((alt, idx) => (
-                <Card
-                  key={idx}
-                  hover
-                  onClick={() => handleSelectAlternative(alt)}
-                  className="cursor-pointer p-4"
-                >
-                  <p className="text-sm">{alt}</p>
-                </Card>
-              ))}
+              {alternatives.map((alt, idx) => {
+                const labels = ['Neutral', 'Negative', 'Positive'];
+                const colors = ['bg-slate-600', 'bg-red-600', 'bg-green-600'];
+                const label = labels[idx] || `Option ${idx + 1}`;
+                const colorClass = colors[idx] || 'bg-cosmic-600';
+
+                return (
+                  <Card
+                    key={idx}
+                    hover
+                    onClick={() => handleSelectAlternative(alt)}
+                    className="cursor-pointer p-4"
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={`${colorClass} text-white text-xs font-bold px-2 py-1 rounded flex-shrink-0`}>
+                        {label}
+                      </span>
+                      <p className="text-sm flex-1">{alt}</p>
+                    </div>
+                  </Card>
+                );
+              })}
               <Button
                 variant="ghost"
                 onClick={() => setShowAlternatives(false)}
