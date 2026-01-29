@@ -4,11 +4,13 @@ import { Container } from '../components/layout/Container';
 import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
 import { BeatCard } from '../components/BeatCard';
+import { openaiService } from '../services/ai/openaiService';
 import type { Beat } from '../types/story';
 
 export default function TimelineBuilderScreen() {
   const { state, dispatch } = useProject();
   const [expandedBeat, setExpandedBeat] = useState<number | null>(1);
+  const [autoCompleting, setAutoCompleting] = useState(false);
 
   if (!state.currentProject) {
     return null;
@@ -37,6 +39,44 @@ export default function TimelineBuilderScreen() {
 
   const handleExpandStory = () => {
     dispatch({ type: 'SET_SCREEN', payload: 'expand-story' });
+  };
+
+  const handleFinishItForMe = async () => {
+    if (!state.currentProject) return;
+
+    setAutoCompleting(true);
+    try {
+      // Auto-complete all empty beats
+      const completions = await openaiService.autoCompleteBeats(
+        beats,
+        state.currentProject.storyBible
+      );
+
+      // Update all completed beats
+      for (const [beatNumber, summary] of Object.entries(completions)) {
+        dispatch({
+          type: 'UPDATE_BEAT',
+          payload: {
+            beatNumber: parseInt(beatNumber),
+            beat: {
+              summary,
+              userWritten: false,
+              status: 'complete',
+              metadata: {
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                source: 'ai-with-context',
+              },
+            },
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Error auto-completing story:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to auto-complete story. Please try again.' });
+    } finally {
+      setAutoCompleting(false);
+    }
   };
 
   return (
@@ -74,6 +114,17 @@ export default function TimelineBuilderScreen() {
       </div>
 
       <div className="flex flex-col gap-3 sticky bottom-4 bg-slate-900/90 backdrop-blur-sm rounded-xl p-4 border border-white/10">
+        {completeness < 100 && (
+          <Button
+            variant="outline"
+            onClick={handleFinishItForMe}
+            disabled={autoCompleting}
+            fullWidth
+            className="border-cosmic-500/50 text-cosmic-300 hover:bg-cosmic-900/30"
+          >
+            {autoCompleting ? '✨ Auto-completing...' : '✨ Finish It For Me (AI)'}
+          </Button>
+        )}
         <div className="flex gap-3">
           <Button
             variant="outline"
@@ -91,7 +142,7 @@ export default function TimelineBuilderScreen() {
           </Button>
         </div>
         <p className="text-xs text-center text-slate-400">
-          Complete at least 6 beats to continue
+          {completeness < 100 ? 'Click "Finish It For Me" to auto-complete all empty beats' : 'All beats complete!'}
         </p>
       </div>
     </Container>
