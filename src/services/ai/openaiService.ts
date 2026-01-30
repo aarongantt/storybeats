@@ -132,11 +132,40 @@ class OpenAIService {
 
   /**
    * Check if a question is a semantic duplicate of previous questions
+   * OR if it asks for data already in the Story Bible
    */
   private isQuestionDuplicate(
     newQuestion: string,
-    questionHistory: QuestionHistory[]
+    questionHistory: QuestionHistory[],
+    currentBible?: Partial<StoryBible>
   ): boolean {
+    // Check 0: Does this ask for data we already have?
+    if (currentBible) {
+      const protagonistName = currentBible.protagonist?.name || currentBible.characters?.[0]?.name;
+      const protagonistOccupation = currentBible.protagonist?.occupation || currentBible.characters?.[0]?.occupation;
+      const protagonistGoal = currentBible.protagonist?.goal || currentBible.characters?.[0]?.wants;
+      const mainConflict = currentBible.conflict?.mainConflict;
+
+      if (protagonistName && /protagonist.*name|name.*protagonist|who is.*protagonist/i.test(newQuestion)) {
+        console.log(`Duplicate detected: Asking for protagonist name but we already have "${protagonistName}"`);
+        return true;
+      }
+
+      if (protagonistOccupation && /occupation|job|do for.*living|profession/i.test(newQuestion)) {
+        console.log(`Duplicate detected: Asking for occupation but we already have "${protagonistOccupation}"`);
+        return true;
+      }
+
+      if (protagonistGoal && /goal|want.*achieve|trying to/i.test(newQuestion)) {
+        console.log(`Duplicate detected: Asking for goal but we already have "${protagonistGoal}"`);
+        return true;
+      }
+
+      if (mainConflict && /main.*conflict|problem|challenge/i.test(newQuestion)) {
+        console.log(`Duplicate detected: Asking for conflict but we already have "${mainConflict}"`);
+        return true;
+      }
+    }
     const newIntent = this.extractQuestionIntent(newQuestion);
     const newQuestionNormalized = newQuestion.toLowerCase()
       .replace(/[?!.,]/g, '')
@@ -254,7 +283,7 @@ Be THOROUGH. Extract even small details. Better to capture too much than too lit
       }
 
       // Check for duplication
-      if (!this.isQuestionDuplicate(question.text, questionHistory)) {
+      if (!this.isQuestionDuplicate(question.text, questionHistory, currentBible)) {
         return question;
       }
 
@@ -297,17 +326,27 @@ ${JSON.stringify(currentBible, null, 2)}
 QUESTIONS ALREADY ASKED (${questionHistory.length}):
 ${questionHistory.map(q => `Q: ${q.question}\nA: ${q.answer}`).join('\n\n')}
 
+DATA ALREADY CAPTURED:
+- Protagonist name: ${currentBible.protagonist?.name || currentBible.characters?.[0]?.name || 'NOT YET CAPTURED'}
+- Protagonist description: ${currentBible.protagonist?.description || currentBible.characters?.[0]?.description || 'NOT YET CAPTURED'}
+- Protagonist occupation: ${currentBible.protagonist?.occupation || currentBible.characters?.[0]?.occupation || 'NOT YET CAPTURED'}
+- Protagonist goal: ${currentBible.protagonist?.goal || currentBible.characters?.[0]?.wants || 'NOT YET CAPTURED'}
+- Main conflict: ${currentBible.conflict?.mainConflict || 'NOT YET CAPTURED'}
+- Antagonist: ${currentBible.conflict?.antagonist || currentBible.characters?.find(c => c.role === 'antagonist')?.name || 'NOT YET CAPTURED'}
+
 QUESTION PRIORITY SYSTEM (ask in this order):
 
-TIER 1 - CORE PROTAGONIST DETAILS (ask these first):
-⚠️ Ask ONLY ONE question about protagonist identity, then move to specific details
-- If protagonist is completely unknown: "Who is your protagonist?" (ONLY ASK THIS ONCE)
-- If you have basic protagonist info, ask SPECIFIC follow-ups:
-  * Missing occupation: "What does [name] do for a living?"
-  * Missing goal: "What does [name] want to achieve?"
-  * Missing fears: "What is [name] most afraid of?"
-  * Missing motivation: "What drives [name]?"
-⚠️ DO NOT ask "Can you describe your protagonist?" if you already asked "Who is your protagonist?" - these are DUPLICATES
+TIER 1 - CORE PROTAGONIST DETAILS:
+🚫 CRITICAL RULE: If protagonist name is already captured (shown above), NEVER ask for name/identity again
+🚫 If you already asked "Who is your protagonist?", DO NOT ask "What is your protagonist's name?" - SKIP to missing details
+
+ASK ONLY IF NOT ALREADY CAPTURED:
+- If NO protagonist info at all AND no identity question asked yet: "Who is your protagonist?"
+- If protagonist name EXISTS, ask about MISSING details ONLY:
+  * If occupation is "NOT YET CAPTURED": "What does [name] do for a living?"
+  * If goal is "NOT YET CAPTURED": "What does [name] want to achieve?"
+  * If protagonist fears is "NOT YET CAPTURED": "What is [name] most afraid of?"
+  * If motivation is "NOT YET CAPTURED": "What drives [name]?"
 
 TIER 2 - CONFLICT & ANTAGONIST:
 - If no conflict.mainConflict: "What is the main problem or challenge in your story?"
