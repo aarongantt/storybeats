@@ -24,7 +24,7 @@ interface AppState {
 }
 
 // Deep merge helper for Story Bible to accumulate data instead of overwriting
-function deepMergeStoryBible(
+export function deepMergeStoryBible(
   current: StoryBible,
   updates: Partial<StoryBible>
 ): StoryBible {

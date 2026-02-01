@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useProject } from '../context/ProjectContext';
+import { useProject, deepMergeStoryBible } from '../context/ProjectContext';
 import { Container } from '../components/layout/Container';
 import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
@@ -7,6 +7,7 @@ import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { ChipSelector } from '../components/ui/ChipSelector';
 import { openaiService } from '../services/ai/openaiService';
+import type { StoryBible, QuestionHistory } from '../types/story';
 
 export default function QuickInterviewScreen() {
   const { state, dispatch } = useProject();
@@ -35,14 +36,21 @@ export default function QuickInterviewScreen() {
     return hasProtagonist && (hasConflict || hasWorld);
   };
 
-  const generateNextQuestion = async () => {
+  const generateNextQuestion = async (
+    freshBible?: StoryBible,
+    freshHistory?: QuestionHistory[]
+  ) => {
     if (!state.currentProject) return;
+
+    // Use provided fresh data, or fall back to state (for initial calls)
+    const bibleToUse = freshBible || state.currentProject.storyBible;
+    const historyToUse = freshHistory || state.questionHistory;
 
     setLoading(true);
     try {
       const question = await openaiService.generateSmartQuestion(
-        state.currentProject.storyBible,
-        state.questionHistory
+        bibleToUse,
+        historyToUse
       );
 
       if (question) {
@@ -95,33 +103,49 @@ export default function QuickInterviewScreen() {
 
     setLoading(true);
     try {
-      // Analyze the response and update Story Bible first
+      // Analyze the response and extract data
       const updates = await openaiService.analyzeResponse(
         state.currentQuestion,
         answer,
         state.currentProject.storyBible
       );
 
-      // Add to question history with extracted data
+      // Compute fresh Bible BEFORE dispatch
+      const freshBible = deepMergeStoryBible(
+        state.currentProject.storyBible,
+        updates
+      );
+
+      // Create new history entry
+      const newHistoryEntry: QuestionHistory = {
+        question: state.currentQuestion.text,
+        answer,
+        extractedData: updates,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Compute fresh history BEFORE dispatch
+      const freshHistory = [...state.questionHistory, newHistoryEntry];
+
+      // Dispatch updates (async)
       dispatch({
         type: 'ADD_QUESTION_HISTORY',
-        payload: {
-          question: state.currentQuestion.text,
-          answer,
-          extractedData: updates,
-          timestamp: new Date().toISOString(),
-        },
+        payload: newHistoryEntry,
       });
 
       dispatch({ type: 'INCREMENT_QUESTION_COUNT' });
-      dispatch({ type: 'UPDATE_STORY_BIBLE', payload: updates });
+
+      dispatch({
+        type: 'UPDATE_STORY_BIBLE',
+        payload: updates,
+      });
 
       // Reset input
       setCustomAnswer('');
       setSelectedChips([]);
 
-      // Generate next question (AI will decide when to stop)
-      await generateNextQuestion();
+      // Generate next question WITH FRESH DATA
+      await generateNextQuestion(freshBible, freshHistory);
     } catch (error) {
       console.error('Error processing answer:', error);
       dispatch({ type: 'SET_ERROR', payload: 'Failed to process answer' });
@@ -166,23 +190,33 @@ export default function QuickInterviewScreen() {
   };
 
   const handleSkip = async () => {
-    if (!state.currentQuestion) return;
+    if (!state.currentQuestion || !state.currentProject) return;
 
-    // Add a skipped entry to history
+    // Create skip history entry
+    const skipEntry: QuestionHistory = {
+      question: state.currentQuestion.text,
+      answer: '[Skipped]',
+      extractedData: {},
+      timestamp: new Date().toISOString(),
+    };
+
+    // Compute fresh history BEFORE dispatch
+    const freshHistory = [...state.questionHistory, skipEntry];
+
+    // Dispatch updates
     dispatch({
       type: 'ADD_QUESTION_HISTORY',
-      payload: {
-        question: state.currentQuestion.text,
-        answer: '[Skipped]',
-        extractedData: {},
-        timestamp: new Date().toISOString(),
-      },
+      payload: skipEntry,
     });
 
     dispatch({ type: 'INCREMENT_QUESTION_COUNT' });
 
-    // Generate next question (AI will decide when to stop)
-    await generateNextQuestion();
+    // Generate next question WITH FRESH HISTORY
+    // Bible unchanged, but pass fresh history
+    await generateNextQuestion(
+      state.currentProject.storyBible,
+      freshHistory
+    );
   };
 
   if (loading && !state.currentQuestion) {
