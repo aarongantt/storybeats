@@ -493,7 +493,17 @@ Generate EXACTLY 4 answer options with different tones:
 1. NEUTRAL: Balanced, straightforward, middle-ground answer
 2. NEGATIVE: Darker, more conflicted, challenging answer that adds complications
 3. POSITIVE: Lighter, more hopeful, optimistic answer
-4. WILD-CARD: Unexpected twist, surprising direction, game-changer
+4. WILD-CARD: GENRE-BENDING PLOT TWIST - This should be SURPRISING and challenge genre expectations
+
+IMPORTANT for WILD-CARD:
+- Think GENRE-BENDING or PLOT TWIST territory
+- Examples:
+  * If story is realistic drama → Wild Card adds supernatural element
+  * If story is fantasy → Wild Card adds sci-fi twist
+  * If story is romance → Wild Card adds thriller/mystery element
+  * If story is straightforward → Wild Card adds unexpected complexity
+- Must remain coherent and grounded in story logic
+- Should genuinely surprise while maintaining narrative cohesion
 
 All options should:
 - Fit the existing story context
@@ -849,6 +859,233 @@ Include ALL characters mentioned, even if information is incomplete.`;
     const data = content ? JSON.parse(content) : { characters: [] };
 
     return data.characters || [];
+  }
+
+  // ============================================================================
+  // LEVEL 1 & LEVEL 2 QUESTION GENERATION (NEW)
+  // ============================================================================
+
+  /**
+   * Check if logline is complete (all 4 components present)
+   * Used to determine if Level 1 is complete and Level 2 should begin
+   */
+  isLoglineComplete(storyBible: Partial<StoryBible>): boolean {
+    const hasProtagonist = !!(
+      storyBible.protagonist?.name &&
+      storyBible.protagonist?.description
+    );
+    const hasGoal = !!(
+      storyBible.protagonist?.goal ||
+      storyBible.protagonist?.want ||
+      storyBible.protagonist?.need
+    );
+    const hasObstacle = !!(
+      storyBible.conflict?.mainConflict ||
+      storyBible.conflict?.antagonist
+    );
+    const hasStakes = !!storyBible.conflict?.stakes;
+
+    return hasProtagonist && hasGoal && hasObstacle && hasStakes;
+  }
+
+  /**
+   * Master question generation method (routes to Level 1 or Level 2)
+   * REPLACES generateSmartQuestion for new flow
+   */
+  async generateNextQuestion(
+    currentBible: Partial<StoryBible>,
+    questionHistory: QuestionHistory[],
+    beats: Beat[]
+  ): Promise<Question | null> {
+    // Determine current level based on logline completeness
+    const loglineComplete = this.isLoglineComplete(currentBible);
+
+    if (!loglineComplete) {
+      // Level 1: Logline questions (up to 7 max)
+      return this.generateLoglineQuestion(currentBible, questionHistory);
+    } else {
+      // Level 2: Beat refinement questions
+      return this.generateBeatRefinementQuestion(currentBible, questionHistory, beats);
+    }
+  }
+
+  /**
+   * Generate Level 1 logline question (adaptive, up to 7 questions max)
+   * Gathers the 4 core logline components
+   */
+  async generateLoglineQuestion(
+    currentBible: Partial<StoryBible>,
+    questionHistory: QuestionHistory[]
+  ): Promise<Question | null> {
+    const client = this.ensureClient();
+
+    // Max 7 questions for Level 1
+    if (questionHistory.length >= 7) {
+      return null;
+    }
+
+    // Check which logline components are missing
+    const loglineComponents = {
+      protagonist: !!(currentBible.protagonist?.name && currentBible.protagonist?.description),
+      goal: !!(currentBible.protagonist?.goal || currentBible.protagonist?.want || currentBible.protagonist?.need),
+      obstacle: !!(currentBible.conflict?.mainConflict || currentBible.conflict?.antagonist),
+      stakes: !!currentBible.conflict?.stakes
+    };
+
+    // If all 4 components present, Level 1 is complete
+    if (Object.values(loglineComponents).every(v => v)) {
+      return null;
+    }
+
+    // Determine which component to ask about
+    const missingComponent = Object.keys(loglineComponents).find(
+      key => !loglineComponents[key as keyof typeof loglineComponents]
+    );
+
+    if (!missingComponent) return null;
+
+    // Generate adaptive question based on missing component and existing context
+    const questionPrompt = `Generate a conversational question to gather: ${missingComponent}
+
+Initial Story Idea: ${currentBible.initialInput || 'Not provided'}
+Already Know: ${JSON.stringify(currentBible, null, 2)}
+
+Previous Questions:
+${questionHistory.map(h => h.question).join('\n')}
+
+The question should:
+- Be natural and adaptive to what we already know
+- Not repeat information from previous questions
+- Target the missing logline component: ${missingComponent}
+- Be conversational and engaging
+
+IMPORTANT: This is a Level 1 question (building the logline). Keep it simple and direct.
+
+Return JSON:
+{
+  "question": "<conversational question>"
+}`;
+
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: questionPrompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
+    });
+
+    this.trackTokens('Generate Logline Question (Level 1)', response.usage);
+
+    const content = response.choices[0].message.content;
+    if (!content) return null;
+
+    const questionData = JSON.parse(content);
+
+    return {
+      id: this.generateUUID(),
+      text: questionData.question,
+      presentationMode: 'free-form',
+      chipOptions: undefined,
+      allowSurpriseMe: false,  // No "Surprise Me" in Level 1
+      allowSkip: false,
+      targeting: `logline-${missingComponent}`,
+      level: 1
+    };
+  }
+
+  /**
+   * Generate Level 2 beat refinement question
+   * Targets incomplete beats based on Story Bible gaps
+   */
+  async generateBeatRefinementQuestion(
+    currentBible: Partial<StoryBible>,
+    questionHistory: QuestionHistory[],
+    beats: Beat[]
+  ): Promise<Question | null> {
+    const client = this.ensureClient();
+
+    // Stop after reasonable number of questions (can be adjusted)
+    if (questionHistory.length >= 20) return null;
+
+    // Import beat validation utilities
+    const { calculateBeatCompletionStatus } = await import('../../utils/beatValidation');
+    const { BEAT_CONTRACTS } = await import('../../constants/beatContracts');
+
+    // Calculate beat completion status
+    const completionStatus = calculateBeatCompletionStatus(currentBible, beats);
+
+    // Prioritize beats 1-3 (foundation)
+    const foundationBeats = completionStatus.filter(b => b.beatNumber <= 3);
+    const incompleteFoundation = foundationBeats.find(b => !b.isComplete && b.canBeGenerated);
+
+    // If foundation incomplete, ask for that
+    const targetBeat = incompleteFoundation ||
+      completionStatus.find(b => !b.isComplete && b.canBeGenerated);
+
+    if (!targetBeat) return null;
+
+    const contract = BEAT_CONTRACTS[targetBeat.beatNumber];
+
+    // Pick a missing Story Bible field
+    const targetField = targetBeat.missingRequirements[0];
+
+    // Generate contextual question
+    const questionPrompt = `Generate a conversational question to gather: ${targetField}
+
+Context:
+- Beat ${targetBeat.beatNumber}: ${contract.title}
+- Purpose: ${contract.purpose}
+- Already know: ${JSON.stringify(currentBible, null, 2)}
+
+Previous Questions:
+${questionHistory.slice(-5).map(h => h.question).join('\n')}
+
+The question should:
+- Be natural and conversational
+- Reference existing story elements (character names, settings)
+- Target the missing field: ${targetField}
+- Help complete Beat ${targetBeat.beatNumber}
+
+Return JSON:
+{
+  "question": "<conversational question>",
+  "presentationMode": "free-form"
+}`;
+
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: questionPrompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
+    });
+
+    this.trackTokens('Generate Beat Refinement Question (Level 2)', response.usage);
+
+    const content = response.choices[0].message.content;
+    if (!content) return null;
+
+    const questionData = JSON.parse(content);
+
+    return {
+      id: this.generateUUID(),
+      text: questionData.question,
+      presentationMode: questionData.presentationMode || 'free-form',
+      chipOptions: undefined,
+      allowSurpriseMe: true,  // "Surprise Me" available in Level 2
+      allowSkip: false,
+      targeting: `beat-${targetBeat.beatNumber}:${targetField}`,
+      level: 2
+    };
+  }
+
+  /**
+   * Generate UUID for questions
+   */
+  private generateUUID(): string {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
   }
 }
 

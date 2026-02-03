@@ -46,7 +46,7 @@ export interface Character {
 }
 
 // Emotional intensity tracking
-export type EmotionalTone = 'neutral' | 'negative' | 'positive' | 'wild-card';
+export type EmotionalTone = 'neutral' | 'negative' | 'positive' | 'wildCard';
 
 export interface EmotionalDataPoint {
   beatNumber: BeatNumber;
@@ -178,7 +178,8 @@ export interface Question {
   chipOptions?: ChipOption[];
   allowSurpriseMe: boolean;
   allowSkip: boolean;
-  targeting: string; // Story Bible field path (e.g., "protagonist.goal")
+  targeting: string; // Story Bible field path (e.g., "protagonist.goal") or beat-level targeting
+  level?: 1 | 2; // Level 1 = logline questions, Level 2 = beat refinement questions
 }
 
 export interface QuestionHistory {

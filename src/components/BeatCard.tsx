@@ -74,7 +74,7 @@ export function BeatCard({
   };
 
   const handleSelectAlternative = async (alternative: string, index: number) => {
-    const tones: EmotionalTone[] = ['neutral', 'negative', 'positive', 'wild-card'];
+    const tones: EmotionalTone[] = ['neutral', 'negative', 'positive', 'wildCard'];
     const selectedTone = tones[index];
 
     // Calculate emotional intensity for this beat

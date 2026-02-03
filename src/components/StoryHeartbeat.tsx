@@ -44,7 +44,7 @@ export function StoryHeartbeat({ beats, onBeatClick, highlightedBeat, className 
     switch (tone) {
       case 'positive': return '#22c55e';
       case 'negative': return '#ef4444';
-      case 'wild-card': return '#a855f7';
+      case 'wildCard': return '#a855f7';
       default: return '#64748b'; // slate
     }
   };
@@ -152,7 +152,7 @@ export function StoryHeartbeat({ beats, onBeatClick, highlightedBeat, className 
             />
 
             {/* Wild card icon */}
-            {p.tone === 'wild-card' && (
+            {p.tone === 'wildCard' && (
               <text
                 x={p.x}
                 y={p.y + 4}
