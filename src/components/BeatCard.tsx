@@ -77,6 +77,14 @@ export function BeatCard({
     const tones: EmotionalTone[] = ['neutral', 'negative', 'positive', 'wildCard'];
     const selectedTone = tones[index];
 
+    // If we're in editing mode, populate the edit field instead of saving directly
+    if (isEditing) {
+      setEditValue(alternative);
+      setShowAlternatives(false);
+      setAlternatives([]);
+      return;
+    }
+
     // Calculate emotional intensity for this beat
     try {
       const emotionalMetrics = await openaiService.calculateEmotionalIntensity(
@@ -257,6 +265,13 @@ export function BeatCard({
               <div className="flex gap-2">
                 <Button onClick={handleSave} disabled={!editValue.trim()}>
                   Save
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleSurpriseMe}
+                  disabled={loading}
+                >
+                  {loading ? 'Generating...' : '🤖 AI Help (Show 4 Options)'}
                 </Button>
                 <Button variant="ghost" onClick={handleCancel}>
                   Cancel
