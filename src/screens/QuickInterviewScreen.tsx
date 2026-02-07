@@ -432,16 +432,14 @@ export default function QuickInterviewScreen() {
                 )}
               </div>
 
-              {question.allowSurpriseMe && (
-                <Button
-                  variant="outline"
-                  onClick={handleSurpriseMe}
-                  disabled={loading}
-                  fullWidth
-                >
-                  🤖 AI Help (Show 4 Options)
-                </Button>
-              )}
+              <Button
+                variant="outline"
+                onClick={handleSurpriseMe}
+                disabled={loading}
+                fullWidth
+              >
+                🤖 AI Help (Show 4 Options)
+              </Button>
 
               <Button
                 variant="primary"
