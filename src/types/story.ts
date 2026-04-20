@@ -180,6 +180,8 @@ export interface Question {
   allowSkip: boolean;
   targeting: string; // Story Bible field path (e.g., "protagonist.goal") or beat-level targeting
   level?: 1 | 2; // Level 1 = logline questions, Level 2 = beat refinement questions
+  pillarKey?: PillarKey; // Phase 1 only: which classic story pillar this question addresses
+  suggestedAnswer?: string; // Phase 1 only: pre-filled suggestion derived from initial input
 }
 
 export interface QuestionHistory {
@@ -187,4 +189,41 @@ export interface QuestionHistory {
   answer: string;
   extractedData: Partial<StoryBible>;
   timestamp: string;
+  phase?: InterviewPhase;
+  pillarKey?: PillarKey;
+  beatNumber?: BeatNumber;
+}
+
+// ============================================================================
+// Interview Phase Model (broad-strokes → beat-driven adaptive)
+// ============================================================================
+
+export type InterviewPhase = 'phase1-pillars' | 'phase2-beats' | 'complete';
+
+export type PillarKey =
+  | 'protagonist'
+  | 'want'
+  | 'obstacle'
+  | 'stakes'
+  | 'settingTime'
+  | 'tone'
+  | 'endingFeeling';
+
+export interface SuggestedAnswer {
+  pillar: PillarKey;
+  suggestion: string;
+  source: 'extracted' | 'none';
+}
+
+export interface BeatCursor {
+  beatNumber: number; // 1..12, or 13 to indicate done
+  questionsAskedForBeat: number; // 0..3
+}
+
+export interface InterviewState {
+  phase: InterviewPhase;
+  phase1Index: number; // 0..6 across the 7 pillars
+  beatCursor: BeatCursor;
+  suggestedAnswers: Partial<Record<PillarKey, SuggestedAnswer>>;
+  lastError: string | null;
 }

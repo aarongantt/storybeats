@@ -1,6 +1,18 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import type { Project, Beat, StoryBible, Question, QuestionHistory, CharacterRole } from '../types/story';
-import { storageService } from '../services/storage/localStorageService';
+import type {
+  Project,
+  Beat,
+  StoryBible,
+  Question,
+  QuestionHistory,
+  CharacterRole,
+  InterviewState,
+  SuggestedAnswer,
+  PillarKey,
+  BeatCursor,
+  InterviewPhase,
+} from '../types/story';
+import { storageService, type InterviewBlob } from '../services/storage/localStorageService';
 import { BeatTitle } from '../types/story';
 
 export type Screen =
@@ -19,9 +31,18 @@ interface AppState {
   questionHistory: QuestionHistory[];
   currentQuestion: Question | null;
   questionCount: number;
+  interviewState: InterviewState;
   loading: boolean;
   error: string | null;
 }
+
+export const FRESH_INTERVIEW_STATE: InterviewState = {
+  phase: 'phase1-pillars',
+  phase1Index: 0,
+  beatCursor: { beatNumber: 1, questionsAskedForBeat: 0 },
+  suggestedAnswers: {},
+  lastError: null,
+};
 
 // Deep merge helper for Story Bible to accumulate data instead of overwriting
 export function deepMergeStoryBible(
@@ -167,7 +188,15 @@ type AppAction =
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'LOAD_PROJECT'; payload: Project }
-  | { type: 'INCREMENT_QUESTION_COUNT' };
+  | { type: 'INCREMENT_QUESTION_COUNT' }
+  | { type: 'SET_INTERVIEW_STATE'; payload: Partial<InterviewState> }
+  | { type: 'SET_SUGGESTED_ANSWERS'; payload: Partial<Record<PillarKey, SuggestedAnswer>> }
+  | { type: 'ADVANCE_PHASE1' }
+  | { type: 'ADVANCE_BEAT_CURSOR'; payload?: BeatCursor }
+  | { type: 'INCREMENT_BEAT_QUESTIONS' }
+  | { type: 'SET_PHASE'; payload: InterviewPhase }
+  | { type: 'RESET_INTERVIEW' }
+  | { type: 'RESTORE_INTERVIEW'; payload: InterviewBlob };
 
 const initialState: AppState = {
   currentProject: null,
@@ -175,9 +204,21 @@ const initialState: AppState = {
   questionHistory: [],
   currentQuestion: null,
   questionCount: 0,
+  interviewState: FRESH_INTERVIEW_STATE,
   loading: false,
   error: null,
 };
+
+function persistInterview(projectId: string | undefined, state: AppState): void {
+  if (!projectId) return;
+  storageService.saveInterview(projectId, {
+    interviewState: state.interviewState,
+    questionHistory: state.questionHistory,
+    currentQuestion: state.currentQuestion,
+    questionCount: state.questionCount,
+    savedAt: new Date().toISOString(),
+  });
+}
 
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -219,7 +260,18 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...action.payload,
       };
       storageService.saveProject(newProject);
-      return { ...state, currentProject: newProject };
+      // Reset interview state for the new project.
+      const nextState: AppState = {
+        ...state,
+        currentProject: newProject,
+        questionHistory: [],
+        currentQuestion: null,
+        questionCount: 0,
+        interviewState: FRESH_INTERVIEW_STATE,
+        error: null,
+      };
+      persistInterview(newProject.id, nextState);
+      return nextState;
     }
 
     case 'UPDATE_PROJECT': {
@@ -260,17 +312,118 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_SCREEN':
       return { ...state, currentScreen: action.payload };
 
-    case 'SET_QUESTION':
-      return { ...state, currentQuestion: action.payload };
+    case 'SET_QUESTION': {
+      const next = { ...state, currentQuestion: action.payload };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
 
-    case 'ADD_QUESTION_HISTORY':
-      return {
+    case 'ADD_QUESTION_HISTORY': {
+      const next = {
         ...state,
         questionHistory: [...state.questionHistory, action.payload],
       };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
 
-    case 'INCREMENT_QUESTION_COUNT':
-      return { ...state, questionCount: state.questionCount + 1 };
+    case 'INCREMENT_QUESTION_COUNT': {
+      const next = { ...state, questionCount: state.questionCount + 1 };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'SET_INTERVIEW_STATE': {
+      const next = {
+        ...state,
+        interviewState: { ...state.interviewState, ...action.payload },
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'SET_SUGGESTED_ANSWERS': {
+      const next = {
+        ...state,
+        interviewState: {
+          ...state.interviewState,
+          suggestedAnswers: { ...state.interviewState.suggestedAnswers, ...action.payload },
+        },
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'ADVANCE_PHASE1': {
+      const next = {
+        ...state,
+        interviewState: {
+          ...state.interviewState,
+          phase1Index: state.interviewState.phase1Index + 1,
+        },
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'ADVANCE_BEAT_CURSOR': {
+      const newCursor =
+        action.payload ?? {
+          beatNumber: state.interviewState.beatCursor.beatNumber + 1,
+          questionsAskedForBeat: 0,
+        };
+      const next = {
+        ...state,
+        interviewState: { ...state.interviewState, beatCursor: newCursor },
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'INCREMENT_BEAT_QUESTIONS': {
+      const next = {
+        ...state,
+        interviewState: {
+          ...state.interviewState,
+          beatCursor: {
+            ...state.interviewState.beatCursor,
+            questionsAskedForBeat: state.interviewState.beatCursor.questionsAskedForBeat + 1,
+          },
+        },
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'SET_PHASE': {
+      const next = {
+        ...state,
+        interviewState: { ...state.interviewState, phase: action.payload },
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'RESET_INTERVIEW': {
+      const next = {
+        ...state,
+        questionHistory: [],
+        currentQuestion: null,
+        questionCount: 0,
+        interviewState: FRESH_INTERVIEW_STATE,
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
+    case 'RESTORE_INTERVIEW':
+      return {
+        ...state,
+        interviewState: action.payload.interviewState,
+        questionHistory: action.payload.questionHistory,
+        currentQuestion: action.payload.currentQuestion,
+        questionCount: action.payload.questionCount,
+      };
 
     case 'SET_LOADING':
       return { ...state, loading: action.payload };
@@ -299,7 +452,10 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     const savedProject = storageService.getCurrentProject();
     if (savedProject) {
       dispatch({ type: 'LOAD_PROJECT', payload: savedProject });
-      // Don't auto-redirect - let the user flow control screen navigation
+      const savedInterview = storageService.getInterview(savedProject.id);
+      if (savedInterview) {
+        dispatch({ type: 'RESTORE_INTERVIEW', payload: savedInterview });
+      }
     }
   }, []);
 

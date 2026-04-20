@@ -1,5 +1,5 @@
 import { BeatTitle } from '../types/story';
-import type { BeatNumber } from '../types/story';
+import type { BeatNumber, StoryBible } from '../types/story';
 
 /**
  * Machine-readable beat contract
@@ -334,6 +334,50 @@ export const BEAT_CONTRACTS: Record<BeatNumber, BeatContract> = {
     validatorPrompt: 'Does this beat reveal character change and provide emotional closure? Rate 0-1.'
   }
 };
+
+/**
+ * Resolve a dotted Story Bible path to a truthy/falsy value.
+ * Used by getMissingFieldsForBeat — kept local to avoid circular imports.
+ */
+function readBiblePath(bible: Partial<StoryBible>, path: string): unknown {
+  return path.split('.').reduce<any>((current, key) => {
+    if (current === undefined || current === null) return undefined;
+    // Tolerate alias mismatches (e.g. "protagonist.wants" vs "protagonist.want").
+    if (current[key] !== undefined) return current[key];
+    if (key === 'wants' && current.want !== undefined) return current.want;
+    if (key === 'want' && current.wants !== undefined) return current.wants;
+    return undefined;
+  }, bible);
+}
+
+/**
+ * Return the list of required Story Bible field paths that are still missing
+ * for a given beat. Checks both the old `protagonist.*` shape and the new
+ * `characters[0]` (main character) shape.
+ */
+export function getMissingFieldsForBeat(
+  beatNumber: BeatNumber,
+  bible: Partial<StoryBible>,
+): string[] {
+  const contract = BEAT_CONTRACTS[beatNumber];
+  const main = bible.characters?.find((c) => c.role === 'main') ?? bible.characters?.[0];
+
+  return contract.requiredStoryBibleFields.filter((field) => {
+    if (readBiblePath(bible, field)) return false;
+
+    // Fall back to the characters[] array for protagonist.* paths.
+    if (field.startsWith('protagonist.') && main) {
+      const key = field.slice('protagonist.'.length);
+      const value =
+        (main as unknown as Record<string, unknown>)[key] ??
+        (key === 'wants' ? main.wants : undefined) ??
+        (key === 'want' ? main.wants : undefined);
+      if (value) return false;
+    }
+
+    return true;
+  });
+}
 
 /**
  * Global rules that apply to all beats

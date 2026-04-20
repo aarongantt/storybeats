@@ -5,7 +5,9 @@ import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { TextArea } from '../components/ui/Input';
-import { openaiService } from '../services/ai/openaiService';
+import { openaiService, derivePillarSuggestion } from '../services/ai/openaiService';
+import { PILLAR_ORDER } from '../constants/broadQuestions';
+import type { PillarKey, SuggestedAnswer } from '../types/story';
 
 const EXAMPLE_PROMPTS = [
   "A detective discovers their childhood friend is the killer they've been hunting...",
@@ -34,27 +36,43 @@ export default function InitialInputScreen() {
     dispatch({ type: 'SET_LOADING', payload: true });
 
     try {
-      // Create a new project
+      // Create a new project (this also resets interview state).
       dispatch({
         type: 'CREATE_PROJECT',
-        payload: { title: input.slice(0, 50) }
+        payload: { title: input.slice(0, 50) },
       });
 
-      // Extract initial Story Bible from user input
+      // Extract initial Story Bible from user input.
       const storyBible = await openaiService.extractStoryBible(input);
 
       dispatch({
         type: 'UPDATE_STORY_BIBLE',
-        payload: storyBible
+        payload: storyBible,
       });
 
-      // Move to foundational questions (Genre, Format, Theme, World)
-      dispatch({ type: 'SET_SCREEN', payload: 'format-confirmation' });
-    } catch (error) {
+      // Derive suggestion strings for each of the 7 pillars from the extraction.
+      const suggestions: Partial<Record<PillarKey, SuggestedAnswer>> = {};
+      for (const pillar of PILLAR_ORDER) {
+        const suggestion = derivePillarSuggestion(storyBible, pillar);
+        suggestions[pillar] = {
+          pillar,
+          suggestion: suggestion ?? '',
+          source: suggestion ? 'extracted' : 'none',
+        };
+      }
+      dispatch({ type: 'SET_SUGGESTED_ANSWERS', payload: suggestions });
+
+      // Route directly into the 7-pillar interview.
+      dispatch({ type: 'SET_PHASE', payload: 'phase1-pillars' });
+      dispatch({ type: 'SET_SCREEN', payload: 'quick-interview' });
+    } catch (error: any) {
       console.error('Error processing initial input:', error);
+      const isAuth = error?.name === 'OpenAIAuthError';
       dispatch({
         type: 'SET_ERROR',
-        payload: 'Failed to process your story idea. Please check your OpenAI API key.'
+        payload: isAuth
+          ? 'Invalid OpenAI API key. Please reset your key and try again.'
+          : 'Failed to process your story idea. Please try again.',
       });
     } finally {
       setLoading(false);

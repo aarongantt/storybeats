@@ -1,6 +1,5 @@
 import type { StoryBible, Beat, BeatNumber, EmotionalTone } from '../types/story';
 import { BEAT_CONTRACTS } from '../constants/beatContracts';
-import type { BeatContract } from '../constants/beatContracts';
 
 /**
  * Beat completion status for a single beat
@@ -149,60 +148,6 @@ export function parseValidationResponse(response: string): ValidationScore {
       feedback: 'Could not parse validation response'
     };
   }
-}
-
-/**
- * Check if logline is complete (all 4 components present)
- * Used to determine if Level 1 is complete
- */
-export function isLoglineComplete(storyBible: Partial<StoryBible>): boolean {
-  const hasProtagonist = !!(
-    storyBible.protagonist?.name &&
-    storyBible.protagonist?.description
-  );
-  const hasGoal = !!(
-    storyBible.protagonist?.goal ||
-    storyBible.protagonist?.want ||
-    storyBible.protagonist?.need
-  );
-  const hasObstacle = !!(
-    storyBible.conflict?.mainConflict ||
-    storyBible.conflict?.antagonist
-  );
-  const hasStakes = !!storyBible.conflict?.stakes;
-
-  return hasProtagonist && hasGoal && hasObstacle && hasStakes;
-}
-
-/**
- * Get logline component status (for Level 1 progress indicator)
- */
-export interface LoglineComponentStatus {
-  protagonist: boolean;
-  goal: boolean;
-  obstacle: boolean;
-  stakes: boolean;
-}
-
-export function getLoglineComponentStatus(
-  storyBible: Partial<StoryBible>
-): LoglineComponentStatus {
-  return {
-    protagonist: !!(
-      storyBible.protagonist?.name &&
-      storyBible.protagonist?.description
-    ),
-    goal: !!(
-      storyBible.protagonist?.goal ||
-      storyBible.protagonist?.want ||
-      storyBible.protagonist?.need
-    ),
-    obstacle: !!(
-      storyBible.conflict?.mainConflict ||
-      storyBible.conflict?.antagonist
-    ),
-    stakes: !!storyBible.conflict?.stakes
-  };
 }
 
 /**

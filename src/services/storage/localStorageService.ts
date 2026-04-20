@@ -1,11 +1,20 @@
-import type { Project } from '../../types/story';
+import type { Project, InterviewState, QuestionHistory, Question } from '../../types/story';
 
 const STORAGE_KEYS = {
   CURRENT_PROJECT: 'storybeats_current_project',
   PROJECT_LIST: 'storybeats_projects',
   USER_PREFERENCES: 'storybeats_preferences',
   OPENAI_KEY: 'storybeats_openai_key',
+  INTERVIEW_STATE: 'storybeats_interview_state',
 };
+
+export interface InterviewBlob {
+  interviewState: InterviewState;
+  questionHistory: QuestionHistory[];
+  currentQuestion: Question | null;
+  questionCount: number;
+  savedAt: string;
+}
 
 export interface UserPreferences {
   theme: 'dark' | 'light';
@@ -114,6 +123,47 @@ class LocalStorageService {
     } catch (error) {
       console.error('Failed to get preferences:', error);
       return { theme: 'dark' };
+    }
+  }
+
+  // Interview state persistence (keyed by project id so projects don't collide)
+  saveInterview(projectId: string, blob: InterviewBlob): void {
+    try {
+      const all = this.getAllInterviews();
+      all[projectId] = blob;
+      localStorage.setItem(STORAGE_KEYS.INTERVIEW_STATE, JSON.stringify(all));
+    } catch (error) {
+      console.error('Failed to save interview state:', error);
+    }
+  }
+
+  getInterview(projectId: string): InterviewBlob | null {
+    try {
+      const all = this.getAllInterviews();
+      return all[projectId] ?? null;
+    } catch (error) {
+      console.error('Failed to read interview state:', error);
+      return null;
+    }
+  }
+
+  clearInterview(projectId: string): void {
+    try {
+      const all = this.getAllInterviews();
+      delete all[projectId];
+      localStorage.setItem(STORAGE_KEYS.INTERVIEW_STATE, JSON.stringify(all));
+    } catch (error) {
+      console.error('Failed to clear interview state:', error);
+    }
+  }
+
+  private getAllInterviews(): Record<string, InterviewBlob> {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.INTERVIEW_STATE);
+      return data ? JSON.parse(data) : {};
+    } catch (error) {
+      console.error('Failed to read interviews index:', error);
+      return {};
     }
   }
 
