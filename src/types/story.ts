@@ -138,6 +138,8 @@ export interface Timeline {
   closingFrame?: Frame;
   completeness: number; // 0-100
   storyHealth?: StoryHealth;  // NEW: Story health metrics
+  storySpine?: string;        // NEW: 5-7 sentence causal arc used as the master
+                              // continuity anchor for all beat generation.
 }
 
 export interface PitchPackage {
@@ -182,6 +184,9 @@ export interface Question {
   level?: 1 | 2; // Level 1 = logline questions, Level 2 = beat refinement questions
   pillarKey?: PillarKey; // Phase 1 only: which classic story pillar this question addresses
   suggestedAnswer?: string; // Phase 1 only: pre-filled suggestion derived from initial input
+  fallbackBiblePath?: string; // Phase 1: specific bible path to write the raw
+                              // answer into if analyzeResponse misses it
+                              // (e.g. "protagonist.name" for a name follow-up)
 }
 
 export interface QuestionHistory {

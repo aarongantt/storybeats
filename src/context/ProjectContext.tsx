@@ -25,6 +25,21 @@ export type Screen =
   | 'what-next'
   | 'pitch';
 
+const VALID_SCREENS: ReadonlySet<string> = new Set<Screen>([
+  'welcome',
+  'initial-input',
+  'quick-interview',
+  'format-confirmation',
+  'timeline-builder',
+  'expand-story',
+  'what-next',
+  'pitch',
+]);
+
+function isValidScreen(value: string): value is Screen {
+  return VALID_SCREENS.has(value);
+}
+
 interface AppState {
   currentProject: Project | null;
   currentScreen: Screen;
@@ -310,6 +325,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
 
     case 'SET_SCREEN':
+      storageService.saveCurrentScreen(action.payload);
       return { ...state, currentScreen: action.payload };
 
     case 'SET_QUESTION': {
@@ -447,7 +463,7 @@ const ProjectContext = createContext<{
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
-  // Load project from localStorage on mount (but don't change screen - let the flow handle that)
+  // Load project + interview state + last screen from localStorage on mount.
   useEffect(() => {
     const savedProject = storageService.getCurrentProject();
     if (savedProject) {
@@ -456,6 +472,10 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       if (savedInterview) {
         dispatch({ type: 'RESTORE_INTERVIEW', payload: savedInterview });
       }
+    }
+    const savedScreen = storageService.getCurrentScreen();
+    if (savedScreen && isValidScreen(savedScreen)) {
+      dispatch({ type: 'SET_SCREEN', payload: savedScreen });
     }
   }, []);
 

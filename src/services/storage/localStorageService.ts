@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   USER_PREFERENCES: 'storybeats_preferences',
   OPENAI_KEY: 'storybeats_openai_key',
   INTERVIEW_STATE: 'storybeats_interview_state',
+  CURRENT_SCREEN: 'storybeats_current_screen',
 };
 
 export interface InterviewBlob {
@@ -164,6 +165,24 @@ class LocalStorageService {
     } catch (error) {
       console.error('Failed to read interviews index:', error);
       return {};
+    }
+  }
+
+  // Current screen persistence (survives refresh so the user lands back where they were)
+  saveCurrentScreen(screen: string): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_SCREEN, screen);
+    } catch (error) {
+      console.error('Failed to save current screen:', error);
+    }
+  }
+
+  getCurrentScreen(): string | null {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.CURRENT_SCREEN);
+    } catch (error) {
+      console.error('Failed to read current screen:', error);
+      return null;
     }
   }
 

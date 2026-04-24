@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useProject } from '../context/ProjectContext';
 import { Container } from '../components/layout/Container';
 import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
+import { TextArea } from '../components/ui/Input';
 import { BeatCard } from '../components/BeatCard';
 import { StoryHeartbeat } from '../components/StoryHeartbeat';
 import { StoryHealthPanel } from '../components/StoryHealthPanel';
@@ -15,6 +16,9 @@ export default function TimelineBuilderScreen() {
   const [expandedBeat, setExpandedBeat] = useState<number | null>(1);
   const [autoCompleting, setAutoCompleting] = useState(false);
   const [storyHealth, setStoryHealth] = useState<StoryHealth | null>(null);
+  const [spineEditing, setSpineEditing] = useState(false);
+  const [spineDraft, setSpineDraft] = useState('');
+  const [spineLoading, setSpineLoading] = useState(false);
 
   // Calculate story health when beats change
   useEffect(() => {
@@ -53,23 +57,66 @@ export default function TimelineBuilderScreen() {
     dispatch({ type: 'SET_SCREEN', payload: 'expand-story' });
   };
 
+  const storySpine = state.currentProject.timeline.storySpine;
+
   const handleFinishItForMe = async () => {
     if (!state.currentProject) return;
 
+    // Short-circuit: nothing to do if every beat is locked or complete.
+    const needsFilling = beats.some(
+      (b) => !b.locked && (!b.summary || b.status === 'empty' || b.status === 'incomplete'),
+    );
+    if (!needsFilling) {
+      dispatch({
+        type: 'SET_ERROR',
+        payload: 'All beats are already complete or locked. Unlock or clear a beat to regenerate it.',
+      });
+      setTimeout(() => dispatch({ type: 'SET_ERROR', payload: null }), 4000);
+      return;
+    }
+
     setAutoCompleting(true);
     try {
-      // Auto-complete all empty beats
+      // Ensure we have a spine for continuity. Generate one if missing.
+      let spine = state.currentProject.timeline.storySpine;
+      if (!spine) {
+        try {
+          spine = await openaiService.generateStorySpine(
+            state.currentProject.storyBible,
+            state.currentProject.format,
+          );
+          dispatch({
+            type: 'UPDATE_PROJECT',
+            payload: {
+              timeline: { ...state.currentProject.timeline, storySpine: spine },
+            },
+          });
+        } catch (e) {
+          console.warn('Spine generation failed; drafting beats without it.', e);
+        }
+      }
+
       const completions = await openaiService.autoCompleteBeats(
         beats,
-        state.currentProject.storyBible
+        state.currentProject.storyBible,
+        spine,
       );
 
-      // Update all completed beats
+      const applied = Object.keys(completions).length;
+      if (applied === 0) {
+        dispatch({
+          type: 'SET_ERROR',
+          payload: 'The AI returned no usable beats. Try again, or regenerate a single beat from its card.',
+        });
+        setTimeout(() => dispatch({ type: 'SET_ERROR', payload: null }), 5000);
+        return;
+      }
+
       for (const [beatNumber, summary] of Object.entries(completions)) {
         dispatch({
           type: 'UPDATE_BEAT',
           payload: {
-            beatNumber: parseInt(beatNumber),
+            beatNumber: parseInt(beatNumber, 10),
             beat: {
               summary,
               userWritten: false,
@@ -91,6 +138,40 @@ export default function TimelineBuilderScreen() {
     }
   };
 
+  const handleRegenerateSpine = async () => {
+    if (!state.currentProject) return;
+    setSpineLoading(true);
+    try {
+      const spine = await openaiService.generateStorySpine(
+        state.currentProject.storyBible,
+        state.currentProject.format,
+      );
+      dispatch({
+        type: 'UPDATE_PROJECT',
+        payload: {
+          timeline: { ...state.currentProject.timeline, storySpine: spine },
+        },
+      });
+      setSpineDraft(spine);
+    } catch (error) {
+      console.error('Error regenerating spine:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to regenerate story spine.' });
+    } finally {
+      setSpineLoading(false);
+    }
+  };
+
+  const handleSaveSpine = () => {
+    if (!state.currentProject) return;
+    dispatch({
+      type: 'UPDATE_PROJECT',
+      payload: {
+        timeline: { ...state.currentProject.timeline, storySpine: spineDraft.trim() || undefined },
+      },
+    });
+    setSpineEditing(false);
+  };
+
   return (
     <Container maxWidth="2xl">
       <Header
@@ -109,6 +190,60 @@ export default function TimelineBuilderScreen() {
             style={{ width: `${completeness}%` }}
           />
         </div>
+      </div>
+
+      {/* Story Spine — the causal backbone for all beat generation */}
+      <div className="mb-6 bg-cosmic-900/30 border border-cosmic-700/40 rounded-lg p-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-semibold text-cosmic-300">🧭 Story Spine</span>
+          <div className="flex gap-2">
+            {!spineEditing && storySpine && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setSpineDraft(storySpine);
+                  setSpineEditing(true);
+                }}
+              >
+                Edit
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleRegenerateSpine}
+              disabled={spineLoading}
+            >
+              {spineLoading ? 'Rewriting…' : storySpine ? '🔄 Rewrite' : '✨ Generate'}
+            </Button>
+          </div>
+        </div>
+        {spineEditing ? (
+          <div className="space-y-2">
+            <TextArea
+              value={spineDraft}
+              onChange={(e) => setSpineDraft(e.target.value)}
+              rows={5}
+              placeholder="5-7 sentences describing the causal arc of your story…"
+            />
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleSaveSpine} disabled={!spineDraft.trim()}>
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSpineEditing(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : storySpine ? (
+          <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{storySpine}</p>
+        ) : (
+          <p className="text-sm text-slate-400 italic">
+            No spine yet. A spine is the causal backbone of your story — generating one first makes
+            all beats flow together.
+          </p>
+        )}
       </div>
 
       {/* Story Heartbeat Graph */}
@@ -133,7 +268,9 @@ export default function TimelineBuilderScreen() {
             <BeatCard
               beat={beat}
               storyBible={state.currentProject!.storyBible}
-              previousBeats={beats.slice(0, beat.number - 1).filter(b => b.status === 'complete')}
+              previousBeats={beats.slice(0, beat.number - 1).filter((b) => b.summary)}
+              followingBeats={beats.slice(beat.number).filter((b) => b.summary)}
+              storySpine={storySpine}
               onUpdate={(updates) => handleUpdateBeat(beat.number, updates)}
               isExpanded={expandedBeat === beat.number}
               onToggleExpand={() => handleToggleExpand(beat.number)}

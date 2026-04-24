@@ -169,15 +169,29 @@ export function validatePitch(raw: unknown): Omit<PitchPackage, 'createdAt'> {
 
 export function validateAutoComplete(raw: unknown): Record<number, string> {
   if (!isObject(raw)) throw new OpenAIValidationError('Expected object for auto-complete.');
+  // Tolerate both {"1": "..."} and {"beats": {"1": "..."}} shapes.
+  const source: Record<string, unknown> = isObject(raw.beats) ? raw.beats : raw;
   const result: Record<number, string> = {};
-  for (const [key, value] of Object.entries(raw)) {
+  for (const [key, value] of Object.entries(source)) {
     const beatNumber = parseInt(key, 10);
     const text = asString(value);
     if (Number.isFinite(beatNumber) && beatNumber >= 1 && beatNumber <= 12 && text) {
       result[beatNumber] = text;
     }
   }
+  if (Object.keys(result).length === 0) {
+    throw new OpenAIValidationError('Auto-complete response contained no valid beats.');
+  }
   return result;
+}
+
+export function validateStorySpine(raw: unknown): string {
+  if (isObject(raw)) {
+    const spine = asString(raw.spine) || asString(raw.storySpine) || asString(raw.synopsis);
+    if (spine) return spine;
+  }
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  throw new OpenAIValidationError('Story spine response was empty.');
 }
 
 export interface EmotionalIntensity {

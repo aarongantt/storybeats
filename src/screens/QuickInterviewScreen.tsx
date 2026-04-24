@@ -14,16 +14,13 @@ import {
   OpenAIServerError,
 } from '../services/ai/retry';
 import { PILLAR_ORDER, BROAD_QUESTIONS, PILLAR_TO_BIBLE_PATH } from '../constants/broadQuestions';
-import { BEAT_CONTRACTS, getMissingFieldsForBeat } from '../constants/beatContracts';
 import { setNestedValue } from '../utils/beatValidation';
 import type {
   StoryBible,
   QuestionHistory,
-  Question,
   PillarKey,
   BeatCursor,
   InterviewPhase,
-  BeatNumber,
 } from '../types/story';
 
 interface FriendlyError {
@@ -51,13 +48,18 @@ function toFriendlyError(error: unknown): FriendlyError {
   return { message: 'Something went wrong. Try again?', canRetry: true };
 }
 
+type DraftStage = 'spine' | 'beats' | 'characters' | 'done';
+
 export default function QuickInterviewScreen() {
   const { state, dispatch } = useProject();
   const [loading, setLoading] = useState(false);
+  const [drafting, setDrafting] = useState<DraftStage | null>(null);
   const [customAnswer, setCustomAnswer] = useState('');
   const [aiOptions, setAiOptions] = useState<string[]>([]);
   const [localError, setLocalError] = useState<FriendlyError | null>(null);
   const hasRequestedRef = useRef(false);
+  const draftingRef = useRef(false);
+  const [draftError, setDraftError] = useState<FriendlyError | null>(null);
 
   const interview = state.interviewState;
   const pillarKey: PillarKey | undefined = state.currentQuestion?.pillarKey;
@@ -66,7 +68,7 @@ export default function QuickInterviewScreen() {
       ? interview.suggestedAnswers[pillarKey]?.suggestion
       : undefined;
 
-  // Keep the textarea in sync with the suggestion when a new pillar question loads.
+  // Sync textarea with suggestion on new pillar question.
   useEffect(() => {
     if (state.currentQuestion && suggestion) {
       setCustomAnswer(suggestion);
@@ -136,15 +138,91 @@ export default function QuickInterviewScreen() {
 
   async function finishInterview(bible: StoryBible, history: QuestionHistory[]) {
     if (!state.currentProject) return;
+    // Guard against concurrent invocations (e.g. fetchNextQuestion returning
+    // complete while the user also clicks "Draft my outline now").
+    if (draftingRef.current) return;
+    draftingRef.current = true;
+    setDraftError(null);
+    setDrafting('characters');
+
+    // Character hierarchy is non-blocking — best-effort.
+    let workingBible: StoryBible = bible;
     try {
       const characters = await openaiService.extractCharacterHierarchy(bible, history);
       if (characters.length > 0) {
         dispatch({ type: 'UPDATE_STORY_BIBLE', payload: { characters } });
+        workingBible = { ...workingBible, characters };
       }
     } catch (error) {
       console.error('Failed to extract character hierarchy:', error);
-      // Non-critical — continue to timeline regardless.
     }
+
+    // Draft the story spine — the causal backbone all beats will follow.
+    setDrafting('spine');
+    let spine: string | undefined;
+    try {
+      spine = await openaiService.generateStorySpine(workingBible, state.currentProject.format);
+      dispatch({
+        type: 'UPDATE_PROJECT',
+        payload: {
+          timeline: { ...state.currentProject.timeline, storySpine: spine },
+        },
+      });
+    } catch (error) {
+      console.error('Failed to generate story spine:', error);
+      // Non-fatal — beats can still be drafted without a spine.
+    }
+
+    // Draft all 12 beats in one continuity-enforced call. This is the
+    // critical step — if it fails, surface a retry rather than silently
+    // landing the user on an empty timeline.
+    setDrafting('beats');
+    try {
+      const completions = await openaiService.autoCompleteBeats(
+        state.currentProject.timeline.beats,
+        workingBible,
+        spine,
+      );
+      for (const [beatNumber, summary] of Object.entries(completions)) {
+        dispatch({
+          type: 'UPDATE_BEAT',
+          payload: {
+            beatNumber: parseInt(beatNumber, 10),
+            beat: {
+              summary,
+              userWritten: false,
+              status: 'complete',
+              metadata: {
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                source: 'ai-with-context',
+              },
+            },
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Failed to auto-draft beats:', error);
+      setDrafting(null);
+      draftingRef.current = false;
+      setDraftError(toFriendlyError(error));
+      return;
+    }
+
+    setDrafting('done');
+    draftingRef.current = false;
+    dispatch({ type: 'SET_QUESTION', payload: null });
+    dispatch({ type: 'SET_SCREEN', payload: 'timeline-builder' });
+  }
+
+  async function retryDrafting() {
+    if (!state.currentProject) return;
+    setDraftError(null);
+    await finishInterview(state.currentProject.storyBible, state.questionHistory);
+  }
+
+  function skipDraftAndGoToTimeline() {
+    setDraftError(null);
     dispatch({ type: 'SET_QUESTION', payload: null });
     dispatch({ type: 'SET_SCREEN', payload: 'timeline-builder' });
   }
@@ -158,29 +236,26 @@ export default function QuickInterviewScreen() {
     setLocalError(null);
     try {
       const question = state.currentQuestion;
-      const wasPhase1 = interview.phase === 'phase1-pillars';
       const currentPillar = question.pillarKey;
-      const currentBeat = interview.beatCursor.beatNumber;
 
-      // 1. Ask the model to extract structured updates from the raw answer.
       const updates = await openaiService.analyzeResponse(
         question,
         trimmed,
         state.currentProject.storyBible,
       );
 
-      // 2. Merge locally so downstream logic has the new values.
       let freshBible = deepMergeStoryBible(state.currentProject.storyBible, updates);
 
-      // 3. Phase 1 fallback: ensure the pillar's canonical field is written even
-      //    if analyzeResponse didn't fill it in (common for tone/endingFeeling).
-      if (wasPhase1 && currentPillar) {
-        const paths = PILLAR_TO_BIBLE_PATH[currentPillar];
-        const primaryPath = paths[0];
-        const current: any = freshBible;
+      // Phase 1 fallback: if analyzeResponse didn't populate the canonical
+      // field for this pillar, write the raw answer in. If the question
+      // targets a specific sub-field (e.g. a name follow-up), prefer that
+      // path over the pillar's default.
+      if (currentPillar) {
+        const primaryPath =
+          question.fallbackBiblePath ?? PILLAR_TO_BIBLE_PATH[currentPillar][0];
         const exists = primaryPath.split('.').reduce<any>(
           (acc, key) => (acc == null ? acc : acc[key]),
-          current,
+          freshBible,
         );
         if (!exists) {
           freshBible = JSON.parse(JSON.stringify(freshBible));
@@ -188,24 +263,22 @@ export default function QuickInterviewScreen() {
         }
       }
 
-      // 4. Record history (tagged with phase + pillar/beat for later).
       const newEntry: QuestionHistory = {
         question: question.text,
         answer: trimmed,
         extractedData: updates,
         timestamp: new Date().toISOString(),
-        phase: interview.phase,
+        phase: 'phase1-pillars',
         pillarKey: currentPillar,
-        beatNumber: interview.phase === 'phase2-beats' ? (currentBeat as BeatNumber) : undefined,
       };
       const freshHistory = [...state.questionHistory, newEntry];
 
       dispatch({ type: 'ADD_QUESTION_HISTORY', payload: newEntry });
       dispatch({ type: 'INCREMENT_QUESTION_COUNT' });
       dispatch({ type: 'UPDATE_STORY_BIBLE', payload: updates });
-      if (wasPhase1 && currentPillar) {
-        // Persist the pillar fallback write so the merged bible matches state.
-        const primaryPath = PILLAR_TO_BIBLE_PATH[currentPillar][0];
+      if (currentPillar) {
+        const primaryPath =
+          question.fallbackBiblePath ?? PILLAR_TO_BIBLE_PATH[currentPillar][0];
         const pathParts = primaryPath.split('.');
         const patch: any = {};
         let cursorObj = patch;
@@ -220,33 +293,15 @@ export default function QuickInterviewScreen() {
       setCustomAnswer('');
       setAiOptions([]);
 
-      // 5. Advance phase/cursor locally for the next fetch.
-      let nextPhase: InterviewPhase = interview.phase;
-      let nextPhase1Index = interview.phase1Index;
-      let nextCursor: BeatCursor = interview.beatCursor;
-
-      if (wasPhase1) {
-        nextPhase1Index = interview.phase1Index + 1;
-        dispatch({ type: 'ADVANCE_PHASE1' });
-        if (nextPhase1Index >= PILLAR_ORDER.length) {
-          nextPhase = 'phase2-beats';
-          dispatch({ type: 'SET_PHASE', payload: 'phase2-beats' });
-        }
-      } else if (interview.phase === 'phase2-beats') {
-        const incremented = interview.beatCursor.questionsAskedForBeat + 1;
-        const beatNumber = interview.beatCursor.beatNumber as BeatNumber;
-        const missingAfter = getMissingFieldsForBeat(beatNumber, freshBible);
-        if (missingAfter.length === 0 || incremented >= 3) {
-          nextCursor = { beatNumber: interview.beatCursor.beatNumber + 1, questionsAskedForBeat: 0 };
-          dispatch({ type: 'ADVANCE_BEAT_CURSOR', payload: nextCursor });
-        } else {
-          nextCursor = { beatNumber: interview.beatCursor.beatNumber, questionsAskedForBeat: incremented };
-          dispatch({ type: 'INCREMENT_BEAT_QUESTIONS' });
-        }
+      const nextPhase1Index = interview.phase1Index + 1;
+      dispatch({ type: 'ADVANCE_PHASE1' });
+      const nextPhase: InterviewPhase =
+        nextPhase1Index >= PILLAR_ORDER.length ? 'complete' : 'phase1-pillars';
+      if (nextPhase === 'complete') {
+        dispatch({ type: 'SET_PHASE', payload: 'complete' });
       }
 
-      // 6. Fetch next question with fresh data.
-      await fetchNextQuestion(freshBible, freshHistory, nextPhase, nextPhase1Index, nextCursor);
+      await fetchNextQuestion(freshBible, freshHistory, nextPhase, nextPhase1Index, interview.beatCursor);
     } catch (error) {
       console.error('Error processing answer:', error);
       setLocalError(toFriendlyError(error));
@@ -265,35 +320,23 @@ export default function QuickInterviewScreen() {
         answer: '[Skipped]',
         extractedData: {},
         timestamp: new Date().toISOString(),
-        phase: interview.phase,
+        phase: 'phase1-pillars',
         pillarKey: state.currentQuestion.pillarKey,
-        beatNumber:
-          interview.phase === 'phase2-beats'
-            ? (interview.beatCursor.beatNumber as BeatNumber)
-            : undefined,
       };
       const freshHistory = [...state.questionHistory, skipEntry];
       dispatch({ type: 'ADD_QUESTION_HISTORY', payload: skipEntry });
 
-      let nextPhase: InterviewPhase = interview.phase;
-      let nextPhase1Index = interview.phase1Index;
-      let nextCursor: BeatCursor = interview.beatCursor;
-
-      if (interview.phase === 'phase1-pillars') {
-        nextPhase1Index = interview.phase1Index + 1;
-        dispatch({ type: 'ADVANCE_PHASE1' });
-        if (nextPhase1Index >= PILLAR_ORDER.length) {
-          nextPhase = 'phase2-beats';
-          dispatch({ type: 'SET_PHASE', payload: 'phase2-beats' });
-        }
-      } else if (interview.phase === 'phase2-beats') {
-        nextCursor = { beatNumber: interview.beatCursor.beatNumber + 1, questionsAskedForBeat: 0 };
-        dispatch({ type: 'ADVANCE_BEAT_CURSOR', payload: nextCursor });
+      const nextPhase1Index = interview.phase1Index + 1;
+      dispatch({ type: 'ADVANCE_PHASE1' });
+      const nextPhase: InterviewPhase =
+        nextPhase1Index >= PILLAR_ORDER.length ? 'complete' : 'phase1-pillars';
+      if (nextPhase === 'complete') {
+        dispatch({ type: 'SET_PHASE', payload: 'complete' });
       }
 
       setCustomAnswer('');
       setAiOptions([]);
-      await fetchNextQuestion(undefined, freshHistory, nextPhase, nextPhase1Index, nextCursor);
+      await fetchNextQuestion(undefined, freshHistory, nextPhase, nextPhase1Index, interview.beatCursor);
     } catch (error) {
       console.error('Error skipping question:', error);
       setLocalError(toFriendlyError(error));
@@ -325,10 +368,55 @@ export default function QuickInterviewScreen() {
     await handleAnswer(option);
   }
 
-  async function handleSkipToTimeline() {
+  async function handleDraftNow() {
     if (!state.currentProject) return;
     dispatch({ type: 'SET_PHASE', payload: 'complete' });
     await finishInterview(state.currentProject.storyBible, state.questionHistory);
+  }
+
+  // Draft failed — let the user retry or skip to the timeline.
+  if (draftError) {
+    return (
+      <Container maxWidth="lg">
+        <Header title="Drafting hit a snag" />
+        <Card className="py-8">
+          <p className="text-red-200 mb-4">{draftError.message}</p>
+          <p className="text-sm text-slate-400 mb-6">
+            Your answers are saved. You can try drafting again, or skip straight to the timeline and
+            build beats there.
+          </p>
+          <div className="flex gap-3">
+            {draftError.canRetry && (
+              <Button onClick={retryDrafting}>Try drafting again</Button>
+            )}
+            <Button variant="outline" onClick={skipDraftAndGoToTimeline}>
+              Go to timeline →
+            </Button>
+          </div>
+        </Card>
+      </Container>
+    );
+  }
+
+  // Drafting overlay — shown while the spine + beats are being drafted.
+  if (drafting && drafting !== 'done') {
+    const msg =
+      drafting === 'characters'
+        ? 'Sorting out your characters…'
+        : drafting === 'spine'
+          ? 'Finding the shape of your story…'
+          : 'Drafting all 12 beats with continuity…';
+    return (
+      <Container maxWidth="lg">
+        <Header title="Drafting your outline" />
+        <Card className="text-center py-12">
+          <div className="animate-pulse text-cosmic-400 text-lg mb-2">{msg}</div>
+          <p className="text-sm text-slate-400">
+            This takes a few seconds — we're generating all 12 beats in one pass so they flow as a single story.
+          </p>
+        </Card>
+      </Container>
+    );
   }
 
   if (!state.currentQuestion && loading) {
@@ -345,95 +433,44 @@ export default function QuickInterviewScreen() {
   if (!state.currentQuestion) return null;
 
   const question = state.currentQuestion;
-  const isPhase1 = interview.phase === 'phase1-pillars';
-  const totalPhase2ForCursor = interview.beatCursor.questionsAskedForBeat;
 
   return (
     <Container maxWidth="lg">
       <Header
         title="Let's build your story foundation"
-        subtitle={
-          isPhase1
-            ? `Question ${Math.min(interview.phase1Index + 1, PILLAR_ORDER.length)} of 7 — broad strokes`
-            : `Beat ${Math.min(interview.beatCursor.beatNumber, 12)} of 12 — adding details`
-        }
+        subtitle={`Question ${Math.min(interview.phase1Index + 1, PILLAR_ORDER.length)} of 7 — broad strokes`}
       />
 
-      {/* Progress indicator */}
       <div className="mb-4 p-4 bg-slate-800/40 border border-white/10 rounded-lg">
-        {isPhase1 ? (
-          <>
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-cosmic-400">
-                Phase 1 · The Classic Story Pillars
-              </h4>
-              <span className="text-xs text-slate-400">
-                {interview.phase1Index + 1} / {PILLAR_ORDER.length}
-              </span>
-            </div>
-            <div className="flex gap-2">
-              {PILLAR_ORDER.map((pillar, idx) => {
-                const done = idx < interview.phase1Index;
-                const current = idx === interview.phase1Index;
-                return (
-                  <div
-                    key={pillar}
-                    className={`flex-1 h-2 rounded-full transition-all ${
-                      done
-                        ? 'bg-cosmic-400'
-                        : current
-                          ? 'bg-cosmic-500/60'
-                          : 'bg-slate-700'
-                    }`}
-                    title={BROAD_QUESTIONS[pillar].shortLabel}
-                  />
-                );
-              })}
-            </div>
-            <p className="mt-2 text-xs text-slate-400">
-              {question.pillarKey ? BROAD_QUESTIONS[question.pillarKey].shortLabel : ''}
-            </p>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-cosmic-400">
-                Phase 2 · Filling in the Beats
-              </h4>
-              <span className="text-xs text-slate-400">
-                Beat {interview.beatCursor.beatNumber} of 12
-                {totalPhase2ForCursor > 0 ? ` · Q${totalPhase2ForCursor + 1}/3 for this beat` : ''}
-              </span>
-            </div>
-            <div className="flex gap-1">
-              {Array.from({ length: 12 }).map((_, idx) => {
-                const beatNum = idx + 1;
-                const done = beatNum < interview.beatCursor.beatNumber;
-                const current = beatNum === interview.beatCursor.beatNumber;
-                return (
-                  <div
-                    key={beatNum}
-                    className={`flex-1 h-2 rounded-full transition-all ${
-                      done ? 'bg-cosmic-400' : current ? 'bg-cosmic-500/60' : 'bg-slate-700'
-                    }`}
-                    title={`Beat ${beatNum}: ${BEAT_CONTRACTS[beatNum as BeatNumber].title}`}
-                  />
-                );
-              })}
-            </div>
-            {interview.beatCursor.beatNumber <= 12 && (
-              <p className="mt-2 text-xs text-slate-400">
-                {BEAT_CONTRACTS[interview.beatCursor.beatNumber as BeatNumber].title}
-              </p>
-            )}
-          </>
-        )}
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold text-cosmic-400">The Classic Story Pillars</h4>
+          <span className="text-xs text-slate-400">
+            {interview.phase1Index + 1} / {PILLAR_ORDER.length}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          {PILLAR_ORDER.map((pillar, idx) => {
+            const done = idx < interview.phase1Index;
+            const current = idx === interview.phase1Index;
+            return (
+              <div
+                key={pillar}
+                className={`flex-1 h-2 rounded-full transition-all ${
+                  done ? 'bg-cosmic-400' : current ? 'bg-cosmic-500/60' : 'bg-slate-700'
+                }`}
+                title={BROAD_QUESTIONS[pillar].shortLabel}
+              />
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-slate-400">
+          {question.pillarKey ? BROAD_QUESTIONS[question.pillarKey].shortLabel : ''}
+        </p>
       </div>
 
       <Card>
         <h3 className="text-xl font-semibold mb-6">{question.text}</h3>
 
-        {/* Suggestion card (Phase 1 only, when we extracted something) */}
         {suggestion && aiOptions.length === 0 && (
           <div className="mb-4 p-4 bg-green-900/20 border border-green-700/40 rounded-lg">
             <p className="text-xs text-green-300 font-semibold mb-2">
@@ -444,20 +481,10 @@ export default function QuickInterviewScreen() {
               <Button size="sm" onClick={() => handleAnswer(suggestion)} disabled={loading}>
                 Use this
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setCustomAnswer(suggestion)}
-                disabled={loading}
-              >
+              <Button size="sm" variant="ghost" onClick={() => setCustomAnswer(suggestion)} disabled={loading}>
                 Edit it
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setCustomAnswer('')}
-                disabled={loading}
-              >
+              <Button size="sm" variant="ghost" onClick={() => setCustomAnswer('')} disabled={loading}>
                 Write my own
               </Button>
             </div>
@@ -512,11 +539,7 @@ export default function QuickInterviewScreen() {
                 }}
               />
               {customAnswer.trim() && (
-                <Button
-                  onClick={() => handleAnswer(customAnswer)}
-                  disabled={loading}
-                  fullWidth
-                >
+                <Button onClick={() => handleAnswer(customAnswer)} disabled={loading} fullWidth>
                   Submit answer
                 </Button>
               )}
@@ -557,8 +580,8 @@ export default function QuickInterviewScreen() {
           </Button>
           <div className="flex items-center gap-4">
             <span className="text-sm text-slate-400">{state.questionHistory.length} answered</span>
-            <Button variant="ghost" size="sm" onClick={handleSkipToTimeline} disabled={loading}>
-              Skip to timeline →
+            <Button variant="ghost" size="sm" onClick={handleDraftNow} disabled={loading}>
+              ✨ Draft my outline now →
             </Button>
           </div>
         </div>

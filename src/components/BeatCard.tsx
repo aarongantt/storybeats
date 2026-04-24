@@ -9,6 +9,8 @@ interface BeatCardProps {
   beat: Beat;
   storyBible: StoryBible;
   previousBeats: Beat[];
+  followingBeats?: Beat[];
+  storySpine?: string;
   onUpdate: (beat: Partial<Beat>) => void;
   isExpanded: boolean;
   onToggleExpand: () => void;
@@ -18,6 +20,8 @@ export function BeatCard({
   beat,
   storyBible,
   previousBeats,
+  followingBeats = [],
+  storySpine,
   onUpdate,
   isExpanded,
   onToggleExpand,
@@ -59,7 +63,9 @@ export function BeatCard({
         beat.number as BeatNumber,
         beat.title,
         storyBible,
-        previousBeats
+        previousBeats,
+        followingBeats,
+        storySpine,
       );
 
       if (suggestions.length > 0) {
@@ -145,7 +151,9 @@ export function BeatCard({
         beat.number as BeatNumber,
         beat.title,
         storyBible,
-        previousBeats
+        previousBeats,
+        followingBeats,
+        storySpine,
       );
 
       if (suggestions.length > 0) {
