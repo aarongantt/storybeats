@@ -11,7 +11,6 @@ import InitialInputScreen from './screens/InitialInputScreen';
 import QuickInterviewScreen from './screens/QuickInterviewScreen';
 import FormatConfirmationScreen from './screens/FormatConfirmationScreen';
 import TimelineBuilderScreen from './screens/TimelineBuilderScreen';
-import ExpandStoryScreen from './screens/ExpandStoryScreen';
 import WhatNextScreen from './screens/WhatNextScreen';
 import PitchGeneratorScreen from './screens/PitchGeneratorScreen';
 
@@ -88,8 +87,6 @@ function App() {
         return <FormatConfirmationScreen />;
       case 'timeline-builder':
         return <TimelineBuilderScreen />;
-      case 'expand-story':
-        return <ExpandStoryScreen />;
       case 'what-next':
         return <WhatNextScreen />;
       case 'pitch':

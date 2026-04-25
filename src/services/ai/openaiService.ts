@@ -13,7 +13,7 @@ import type {
   BeatCursor,
   InterviewPhase,
 } from '../../types/story';
-import { PILLAR_ORDER } from '../../constants/broadQuestions';
+import { PILLAR_ORDER, TURNING_POINT_ORDER } from '../../constants/broadQuestions';
 import { BROAD_QUESTIONS } from '../../constants/broadQuestions';
 import { withResilience } from './retry';
 import {
@@ -172,6 +172,13 @@ world.rules — any explicit rules of the world. Array. Optional.
 theme — emotional flavor / tonal signature. "tense, claustrophobic, darkly comic". Leave blank if not clearly implied.
 endingVibe — how the reader should FEEL at the end. Leave blank unless explicitly stated.
 
+DRAMATIC ANCHORS (leave blank if not explicitly named in the input — do not invent):
+inciting — the specific event that pulls the protagonist into the story they can't avoid.
+turningPoint — the deliberate choice or action that locks them in (point of commitment).
+midpointShift — a major mid-story shift, revelation, or betrayal that flips the protagonist's understanding.
+lowestPoint — the rock-bottom moment where all hope feels lost.
+transformation — how the protagonist is fundamentally different by the end.
+
 PROTAGONIST SELECTION — if the input describes multiple main actors (e.g. a guard AND a team of thieves), choose the one whose POV drives the story. That is usually the character the narrator follows, or the first-named character in the setup.
 
 Return JSON. Omit fields you cannot extract. Do NOT invent. Here is the shape:
@@ -184,6 +191,11 @@ Return JSON. Omit fields you cannot extract. Do NOT invent. Here is the shape:
   "conflict": { "mainConflict": "...", "antagonist": "...", "stakes": "..." },
   "theme": "...",
   "endingVibe": "...",
+  "inciting": "...",
+  "turningPoint": "...",
+  "midpointShift": "...",
+  "lowestPoint": "...",
+  "transformation": "...",
   "secondaryCharacters": [{"name":"...","role":"...","relationship":"..."}]
 }`;
 
@@ -219,6 +231,11 @@ Return JSON with this shape (all fields optional):
   "conflict": {"mainConflict":"...","antagonist":"...","stakes":"..."},
   "theme": "...",
   "endingVibe": "...",
+  "inciting": "...",
+  "turningPoint": "...",
+  "midpointShift": "...",
+  "lowestPoint": "...",
+  "transformation": "...",
   "secondaryCharacters": [{"name":"...","role":"...","relationship":"..."}]
 }`;
 
@@ -324,15 +341,23 @@ Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."
     const main = storyBible.characters?.find((c) => c.role === 'main') ?? storyBible.characters?.[0];
     const mainName = main?.name || storyBible.protagonist?.name || 'the protagonist';
 
+    const anchors: string[] = [];
+    if (storyBible.inciting) anchors.push(`- Inciting moment: ${storyBible.inciting}`);
+    if (storyBible.turningPoint) anchors.push(`- Point of commitment: ${storyBible.turningPoint}`);
+    if (storyBible.midpointShift) anchors.push(`- Midpoint twist: ${storyBible.midpointShift}`);
+    if (storyBible.lowestPoint) anchors.push(`- Lowest point: ${storyBible.lowestPoint}`);
+    if (storyBible.transformation) anchors.push(`- Transformation: ${storyBible.transformation}`);
+
     const prompt = `Write a story spine: the causal backbone of this story in 5-7 sentences. Each sentence must flow from the previous. Use the Pixar "Once upon a time / Every day / Until one day / Because of that / Because of that / Until finally / Ever since" scaffold as a guide (you can drop or rearrange beats), but output prose, not labeled lines.
 
 STORY BIBLE:
 ${JSON.stringify(storyBible, null, 2)}
 
-${format ? `FORMAT: ${format}\n` : ''}REQUIREMENTS:
+${anchors.length ? `KEY DRAMATIC ANCHORS (the spine must respect these — these ARE the turning points):\n${anchors.join('\n')}\n\n` : ''}${format ? `FORMAT: ${format}\n` : ''}REQUIREMENTS:
 - Use ${mainName} by name.
 - Establish the setting in the first sentence.
 - The middle sentences must escalate: each sentence describes a cause or consequence of the previous one.
+- Weave the dramatic anchors above into the appropriate sentences (inciting moment early, midpoint twist around the middle, lowest point near the end, transformation in the final sentence).
 - The final sentence must land on the emotional ending the user intends (${storyBible.endingVibe || 'resolution'}).
 - No bullet points. No labels. Just flowing prose.
 - 5 to 7 sentences. Concise, specific, evocative.
@@ -346,15 +371,19 @@ Return JSON: {"spine":"<the prose spine>"}`;
     storyBible: StoryBible,
     beats: Beat[],
     format: string,
+    storySpine?: string,
   ): Promise<PitchPackage> {
     const beatsText = beats
       .filter((b) => b.status === 'complete')
       .map((b) => `Beat ${b.number}: ${b.summary}`)
       .join('\n\n');
 
+    const main = storyBible.characters?.find((c) => c.role === 'main') ?? storyBible.characters?.[0];
+    const protagonistName = main?.name || storyBible.protagonist?.name || 'the protagonist';
+
     const prompt = `Generate a pitch package for this story.
 
-STORY BEATS:
+${storySpine ? `STORY SPINE (the causal backbone — every output below must honor this arc):\n${storySpine}\n\n` : ''}STORY BEATS (in order):
 ${beatsText}
 
 STORY BIBLE:
@@ -362,9 +391,17 @@ ${JSON.stringify(storyBible, null, 2)}
 
 FORMAT: ${format}
 
+REQUIREMENTS:
+- Logline: ONE sentence. Name the protagonist (${protagonistName}), their want, and the central opposition. No subplots, no theme talk.
+- Short synopsis: ONE paragraph (3-5 sentences). Open with the inciting incident, climb through the central escalation, end with the emotional landing point. Match the tone of the spine.
+- One-page synopsis: 3-4 paragraphs. Tell the actual story — characters, decisions, turns. Stay faithful to the beats; do not invent events not in the outline.
+- Numbered outline: Each of the 12 beats summarized in one short line. Number them 1-12.
+
+Be faithful to the outline. Do not embellish, reinterpret, or add subplots that aren't in the beats.
+
 Return JSON: {"logline":"...","shortSynopsis":"...","onePageSynopsis":"...","numberedOutline":"..."}`;
 
-    const data = await this.callJSON(prompt, validatePitch, 'Generate Pitch');
+    const data = await this.callJSON(prompt, validatePitch, 'Generate Pitch', { temperature: 0.5 });
     return { ...data, createdAt: new Date().toISOString() };
   }
 
@@ -372,12 +409,16 @@ Return JSON: {"logline":"...","shortSynopsis":"...","onePageSynopsis":"...","num
    * Generate every empty, non-locked beat in ONE call, using the story spine
    * and any existing/locked beats as fixed waypoints. Each beat references the
    * previous one explicitly so the final outline reads as a continuous arc.
+   *
+   * Each generated beat also includes emotional intensity (-10..10) and
+   * dramatic tension (0..10) so the Story Heartbeat / Health panels work for
+   * AI-drafted timelines without requiring 12 follow-up calls.
    */
   async autoCompleteBeats(
     beats: Beat[],
     storyBible: StoryBible,
     storySpine?: string,
-  ): Promise<Record<number, string>> {
+  ): Promise<Record<number, { summary: string; intensity?: number; tension?: number }>> {
     // Locked beats and beats the user explicitly completed are treated as canon.
     const fixed = beats.filter((b) => b.locked || (b.summary && b.status === 'complete'));
     const toGenerate = beats.filter((b) => !b.locked && (!b.summary || b.status === 'empty' || b.status === 'incomplete'));
@@ -388,11 +429,33 @@ Return JSON: {"logline":"...","shortSynopsis":"...","onePageSynopsis":"...","num
     const antagonist = storyBible.characters?.find((c) => c.role === 'antagonist');
     const antagonistName = antagonist?.name || storyBible.conflict?.antagonist;
 
+    // Map dramatic anchors to the beats they belong to. The model will be
+    // told to use these as the source material for the relevant beat — this
+    // is the difference between "AI invents a midpoint" and "AI dramatizes
+    // the midpoint the user described."
+    const anchorMap: Record<number, string> = {};
+    if (storyBible.inciting) anchorMap[3] = `INCITING MOMENT: ${storyBible.inciting}`;
+    if (storyBible.turningPoint) {
+      anchorMap[5] = `POINT OF COMMITMENT: ${storyBible.turningPoint}`;
+      anchorMap[6] = `(continues from the point of commitment in beat 5)`;
+    }
+    if (storyBible.midpointShift) {
+      anchorMap[7] = `MIDPOINT TWIST setup: ${storyBible.midpointShift}`;
+      anchorMap[8] = `MIDPOINT TWIST revelation: ${storyBible.midpointShift}`;
+    }
+    if (storyBible.lowestPoint) anchorMap[10] = `LOWEST POINT: ${storyBible.lowestPoint}`;
+    if (storyBible.transformation) {
+      anchorMap[11] = `TRANSFORMATION begins: ${storyBible.transformation}`;
+      anchorMap[12] = `TRANSFORMATION lands: ${storyBible.transformation}`;
+    }
+
     const beatSkeleton = beats
       .map((b) => {
         const isFixed = fixed.some((f) => f.number === b.number);
+        const anchor = anchorMap[b.number];
+        const anchorTag = anchor ? `\n    ↳ ${anchor}` : '';
         if (isFixed) return `Beat ${b.number} — "${b.title}" [CANON, DO NOT CHANGE]: ${b.summary}`;
-        return `Beat ${b.number} — "${b.title}" [GENERATE]`;
+        return `Beat ${b.number} — "${b.title}" [GENERATE]${anchorTag}`;
       })
       .join('\n');
 
@@ -401,7 +464,7 @@ Return JSON: {"logline":"...","shortSynopsis":"...","onePageSynopsis":"...","num
 ${storySpine ? `STORY SPINE (the causal backbone — every beat must honor it):\n${storySpine}\n\n` : ''}STORY BIBLE:
 ${JSON.stringify(storyBible, null, 2)}
 
-BEAT MAP (CANON beats are fixed — write around them; GENERATE beats are yours):
+BEAT MAP (CANON beats are fixed — write around them; GENERATE beats are yours; anchors marked ↳ MUST be the source material for that beat):
 ${beatSkeleton}
 
 HARD RULES — each generated beat MUST:
@@ -415,10 +478,21 @@ ${antagonistName ? `4. Reference ${antagonistName} or the main conflict ("${stor
 
 TONE: Neutral — balanced, grounded. The user will regenerate individual beats later if they want a different direction.
 
+For each beat, also score:
+- intensity: emotional valence on a -10..10 scale. -10 = darkest/tragic, 0 = neutral, +10 = triumphant/hopeful.
+- tension: dramatic stakes on a 0..10 scale. 0 = calm, 5 = moderate stakes, 10 = life-or-death.
+A scene can be positive but high-tension (winning under pressure) or negative but low-tension (quiet sadness).
+Beat 10 (lowest point) typically lands between intensity -8 and -3 with tension 8-10. Beat 12 (resolution) typically lands at the user's chosen ending feeling.
+
 Return JSON:
 {
   "beats": {
-    ${toGenerate.map((b) => `"${b.number}": "<beat ${b.number} prose, 2-3 sentences>"`).join(',\n    ')}
+    ${toGenerate
+      .map(
+        (b) =>
+          `"${b.number}": { "summary": "<beat ${b.number} prose, 2-3 sentences>", "intensity": <-10..10>, "tension": <0..10> }`,
+      )
+      .join(',\n    ')}
   }
 }`;
 
@@ -497,6 +571,7 @@ Include ALL characters mentioned. For each: role is one of "main", "supporting",
   async generateInterviewQuestion(
     phase: InterviewPhase,
     phase1Index: number,
+    phase2Index: number,
     bible: Partial<StoryBible>,
     history: QuestionHistory[],
     beats: Beat[],
@@ -505,19 +580,17 @@ Include ALL characters mentioned. For each: role is one of "main", "supporting",
     question: Question | null;
     nextPhase: InterviewPhase;
     nextPhase1Index: number;
+    nextPhase2Index: number;
     nextBeatCursor: BeatCursor;
   }> {
-    // Walk the phase state machine. Phase 1 never calls the AI.
     let currentPhase: InterviewPhase = phase;
-    let currentIndex = phase1Index;
-    let currentCursor: BeatCursor = { ...beatCursor };
+    let currentP1 = phase1Index;
+    let currentP2 = phase2Index;
+    const currentCursor: BeatCursor = { ...beatCursor };
 
+    // Phase 1 — Foundation pillars. No AI call for question selection.
     if (currentPhase === 'phase1-pillars') {
-      // Walk pillars in order. Skip any we already have a confident
-      // extraction for; only ask the gaps. If the user previously skipped a
-      // pillar (no extracted answer either), we respect that via the stored
-      // phase1Index, which has already advanced past it.
-      let i = currentIndex;
+      let i = currentP1;
       while (i < PILLAR_ORDER.length) {
         const pillar = PILLAR_ORDER[i];
         if (hasConfidentAnswer(bible, pillar)) {
@@ -529,22 +602,46 @@ Include ALL characters mentioned. For each: role is one of "main", "supporting",
           question: buildPillarQuestion(pillar, suggestion, bible),
           nextPhase: 'phase1-pillars',
           nextPhase1Index: i,
+          nextPhase2Index: currentP2,
           nextBeatCursor: currentCursor,
         };
       }
-      // All pillars either extracted or skipped — we have enough to draft.
-      currentPhase = 'complete';
-      currentIndex = i;
+      // Foundation done — transition to dramatic-moments phase.
+      currentPhase = 'phase2-turning-points';
+      currentP1 = i;
     }
 
-    // Suppress unused var warnings when Phase 2 is disabled.
+    // Phase 2 — Key Dramatic Moments. Same gap-skipping mechanic.
+    if (currentPhase === 'phase2-turning-points') {
+      let j = currentP2;
+      while (j < TURNING_POINT_ORDER.length) {
+        const pillar = TURNING_POINT_ORDER[j];
+        if (hasConfidentAnswer(bible, pillar)) {
+          j++;
+          continue;
+        }
+        const suggestion = derivePillarSuggestion(bible, pillar);
+        return {
+          question: buildPillarQuestion(pillar, suggestion, bible),
+          nextPhase: 'phase2-turning-points',
+          nextPhase1Index: currentP1,
+          nextPhase2Index: j,
+          nextBeatCursor: currentCursor,
+        };
+      }
+      // Both phases done — drafting time.
+      currentPhase = 'complete';
+      currentP2 = j;
+    }
+
     void history;
     void beats;
 
     return {
       question: null,
       nextPhase: 'complete',
-      nextPhase1Index: currentIndex,
+      nextPhase1Index: currentP1,
+      nextPhase2Index: currentP2,
       nextBeatCursor: currentCursor,
     };
   }
@@ -633,6 +730,27 @@ export function hasConfidentAnswer(bible: Partial<StoryBible>, pillar: PillarKey
       const v = bible.endingVibe;
       return !!(v && v.length >= 3);
     }
+    // Phase 2 — Key Dramatic Moments
+    case 'incitingMoment': {
+      const v = bible.inciting;
+      return !!(v && v.length >= 5 && !looksLikePlot(v));
+    }
+    case 'pointOfCommitment': {
+      const v = bible.turningPoint;
+      return !!(v && v.length >= 5 && !looksLikePlot(v));
+    }
+    case 'midpointTwist': {
+      const v = bible.midpointShift;
+      return !!(v && v.length >= 5 && !looksLikePlot(v));
+    }
+    case 'lowestPoint': {
+      const v = bible.lowestPoint;
+      return !!(v && v.length >= 5 && !looksLikePlot(v));
+    }
+    case 'transformation': {
+      const v = bible.transformation;
+      return !!(v && v.length >= 5 && !looksLikePlot(v));
+    }
     default:
       return false;
   }
@@ -693,6 +811,27 @@ export function buildPillarQuestionText(pillar: PillarKey, bible: Partial<StoryB
       return BROAD_QUESTIONS.tone.text;
     case 'endingFeeling':
       return BROAD_QUESTIONS.endingFeeling.text;
+    // Phase 2 — Key Dramatic Moments. All grounded in protagonist name when known.
+    case 'incitingMoment':
+      return subject === 'your protagonist'
+        ? "What specifically pulls your main character into the story they can't avoid?"
+        : `What specifically pulls ${subject} into the story they can't avoid?`;
+    case 'pointOfCommitment':
+      return subject === 'your protagonist'
+        ? "What does your main character do that locks them in — the choice they can't take back?"
+        : `What does ${subject} do that locks them in — the choice they can't take back?`;
+    case 'midpointTwist':
+      return subject === 'your protagonist'
+        ? 'What major shift or revelation hits in the middle that changes everything they thought they knew?'
+        : `What major shift or revelation hits in the middle that changes everything ${subject} thought they knew?`;
+    case 'lowestPoint':
+      return subject === 'your protagonist'
+        ? "What's their rock bottom — the moment when all hope feels lost?"
+        : `What's ${subject}'s rock bottom — the moment when all hope feels lost?`;
+    case 'transformation':
+      return subject === 'your protagonist'
+        ? 'How is your main character fundamentally different by the end?'
+        : `How is ${subject} fundamentally different by the end?`;
   }
 }
 
@@ -800,6 +939,18 @@ export function derivePillarSuggestion(
     case 'endingFeeling': {
       return bible.endingVibe || null;
     }
+    // Phase 2 — usually empty until the user answers, but allow extraction
+    // for stories where the rough idea already names a turning point.
+    case 'incitingMoment':
+      return bible.inciting || null;
+    case 'pointOfCommitment':
+      return bible.turningPoint || null;
+    case 'midpointTwist':
+      return bible.midpointShift || null;
+    case 'lowestPoint':
+      return bible.lowestPoint || null;
+    case 'transformation':
+      return bible.transformation || null;
     default:
       return null;
   }

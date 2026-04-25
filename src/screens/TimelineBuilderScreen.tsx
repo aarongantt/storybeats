@@ -53,10 +53,6 @@ export default function TimelineBuilderScreen() {
     }
   };
 
-  const handleExpandStory = () => {
-    dispatch({ type: 'SET_SCREEN', payload: 'expand-story' });
-  };
-
   const storySpine = state.currentProject.timeline.storySpine;
 
   const handleFinishItForMe = async () => {
@@ -112,15 +108,28 @@ export default function TimelineBuilderScreen() {
         return;
       }
 
-      for (const [beatNumber, summary] of Object.entries(completions)) {
+      for (const [beatNumber, data] of Object.entries(completions)) {
+        const num = parseInt(beatNumber, 10);
+        const emotionalData =
+          data.intensity !== undefined && data.tension !== undefined
+            ? {
+                beatNumber: num as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12,
+                intensity: data.intensity,
+                tension: data.tension,
+                tone: 'neutral' as const,
+                timestamp: new Date().toISOString(),
+              }
+            : undefined;
         dispatch({
           type: 'UPDATE_BEAT',
           payload: {
-            beatNumber: parseInt(beatNumber, 10),
+            beatNumber: num,
             beat: {
-              summary,
+              summary: data.summary,
               userWritten: false,
               status: 'complete',
+              selectedTone: 'neutral',
+              ...(emotionalData ? { emotionalData } : {}),
               metadata: {
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
@@ -268,8 +277,12 @@ export default function TimelineBuilderScreen() {
             <BeatCard
               beat={beat}
               storyBible={state.currentProject!.storyBible}
-              previousBeats={beats.slice(0, beat.number - 1).filter((b) => b.summary)}
-              followingBeats={beats.slice(beat.number).filter((b) => b.summary)}
+              previousBeats={beats
+                .slice(0, beat.number - 1)
+                .filter((b) => b.status === 'complete' && b.summary)}
+              followingBeats={beats
+                .slice(beat.number)
+                .filter((b) => b.status === 'complete' && b.summary)}
               storySpine={storySpine}
               onUpdate={(updates) => handleUpdateBeat(beat.number, updates)}
               isExpanded={expandedBeat === beat.number}
@@ -296,22 +309,13 @@ export default function TimelineBuilderScreen() {
             {autoCompleting ? '✨ Auto-completing...' : '✨ Finish It For Me (AI)'}
           </Button>
         )}
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            onClick={handleExpandStory}
-            fullWidth
-          >
-            💡 Expand Your Story
-          </Button>
-          <Button
-            onClick={handleContinue}
-            disabled={completeness < 50}
-            fullWidth
-          >
-            {completeness >= 50 ? 'Continue →' : `Complete ${Math.ceil((50 - completeness) / 8.33)} more beats`}
-          </Button>
-        </div>
+        <Button
+          onClick={handleContinue}
+          disabled={completeness < 50}
+          fullWidth
+        >
+          {completeness >= 50 ? 'Continue →' : `Complete ${Math.ceil((50 - completeness) / 8.33)} more beats`}
+        </Button>
         <p className="text-xs text-center text-slate-400">
           {completeness < 100 ? 'Click "Finish It For Me" to auto-complete all empty beats' : 'All beats complete!'}
         </p>

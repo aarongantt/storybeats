@@ -84,6 +84,20 @@ export function validateStoryBibleExtraction(raw: unknown): Partial<StoryBible> 
   const endingVibe = asString(raw.endingVibe);
   if (endingVibe) result.endingVibe = endingVibe;
 
+  // Phase 2 dramatic anchors — usually unset on initial extraction but allowed
+  // through if the rough idea named them.
+  const inciting = asString(raw.inciting);
+  if (inciting) result.inciting = inciting;
+
+  const midpointShift = asString(raw.midpointShift);
+  if (midpointShift) result.midpointShift = midpointShift;
+
+  const lowestPoint = asString(raw.lowestPoint);
+  if (lowestPoint) result.lowestPoint = lowestPoint;
+
+  const transformation = asString(raw.transformation);
+  if (transformation) result.transformation = transformation;
+
   if (Array.isArray(raw.secondaryCharacters)) {
     const chars = raw.secondaryCharacters
       .filter(isObject)
@@ -167,18 +181,41 @@ export function validatePitch(raw: unknown): Omit<PitchPackage, 'createdAt'> {
   };
 }
 
-export function validateAutoComplete(raw: unknown): Record<number, string> {
+export interface AutoCompleteBeat {
+  summary: string;
+  intensity?: number; // -10 to 10
+  tension?: number; //   0 to 10
+}
+
+export function validateAutoComplete(raw: unknown): Record<number, AutoCompleteBeat> {
   if (!isObject(raw)) throw new OpenAIValidationError('Expected object for auto-complete.');
-  // Tolerate both {"1": "..."} and {"beats": {"1": "..."}} shapes.
+  // Tolerate both {"1": "..."} (legacy) and {"beats": {"1": {summary, intensity, tension}}} shapes.
   const source: Record<string, unknown> = isObject(raw.beats) ? raw.beats : raw;
-  const result: Record<number, string> = {};
+  const result: Record<number, AutoCompleteBeat> = {};
+
   for (const [key, value] of Object.entries(source)) {
     const beatNumber = parseInt(key, 10);
-    const text = asString(value);
-    if (Number.isFinite(beatNumber) && beatNumber >= 1 && beatNumber <= 12 && text) {
-      result[beatNumber] = text;
+    if (!Number.isFinite(beatNumber) || beatNumber < 1 || beatNumber > 12) continue;
+
+    if (typeof value === 'string') {
+      const text = asString(value);
+      if (text) result[beatNumber] = { summary: text };
+      continue;
+    }
+
+    if (isObject(value)) {
+      const summary = asString(value.summary);
+      if (!summary) continue;
+      const intensity = asNumber(value.intensity);
+      const tension = asNumber(value.tension);
+      result[beatNumber] = {
+        summary,
+        intensity: intensity === undefined ? undefined : clamp(intensity, -10, 10),
+        tension: tension === undefined ? undefined : clamp(tension, 0, 10),
+      };
     }
   }
+
   if (Object.keys(result).length === 0) {
     throw new OpenAIValidationError('Auto-complete response contained no valid beats.');
   }

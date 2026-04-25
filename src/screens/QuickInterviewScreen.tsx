@@ -13,7 +13,12 @@ import {
   OpenAIAuthError,
   OpenAIServerError,
 } from '../services/ai/retry';
-import { PILLAR_ORDER, BROAD_QUESTIONS, PILLAR_TO_BIBLE_PATH } from '../constants/broadQuestions';
+import {
+  PILLAR_ORDER,
+  TURNING_POINT_ORDER,
+  BROAD_QUESTIONS,
+  PILLAR_TO_BIBLE_PATH,
+} from '../constants/broadQuestions';
 import { setNestedValue } from '../utils/beatValidation';
 import type {
   StoryBible,
@@ -91,6 +96,7 @@ export default function QuickInterviewScreen() {
     freshHistory?: QuestionHistory[],
     phaseOverride?: InterviewPhase,
     phase1IndexOverride?: number,
+    phase2IndexOverride?: number,
     beatCursorOverride?: BeatCursor,
   ) {
     if (!state.currentProject) return;
@@ -100,6 +106,7 @@ export default function QuickInterviewScreen() {
 
     const phase = phaseOverride ?? interview.phase;
     const phase1Index = phase1IndexOverride ?? interview.phase1Index;
+    const phase2Index = phase2IndexOverride ?? interview.phase2Index;
     const cursor = beatCursorOverride ?? interview.beatCursor;
 
     setLoading(true);
@@ -108,6 +115,7 @@ export default function QuickInterviewScreen() {
       const result = await openaiService.generateInterviewQuestion(
         phase,
         phase1Index,
+        phase2Index,
         bibleToUse,
         historyToUse,
         beatsToUse,
@@ -119,6 +127,7 @@ export default function QuickInterviewScreen() {
         payload: {
           phase: result.nextPhase,
           phase1Index: result.nextPhase1Index,
+          phase2Index: result.nextPhase2Index,
           beatCursor: result.nextBeatCursor,
         },
       });
@@ -183,15 +192,28 @@ export default function QuickInterviewScreen() {
         workingBible,
         spine,
       );
-      for (const [beatNumber, summary] of Object.entries(completions)) {
+      for (const [beatNumber, data] of Object.entries(completions)) {
+        const num = parseInt(beatNumber, 10);
+        const emotionalData =
+          data.intensity !== undefined && data.tension !== undefined
+            ? {
+                beatNumber: num as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12,
+                intensity: data.intensity,
+                tension: data.tension,
+                tone: 'neutral' as const,
+                timestamp: new Date().toISOString(),
+              }
+            : undefined;
         dispatch({
           type: 'UPDATE_BEAT',
           payload: {
-            beatNumber: parseInt(beatNumber, 10),
+            beatNumber: num,
             beat: {
-              summary,
+              summary: data.summary,
               userWritten: false,
               status: 'complete',
+              selectedTone: 'neutral',
+              ...(emotionalData ? { emotionalData } : {}),
               metadata: {
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
@@ -268,7 +290,7 @@ export default function QuickInterviewScreen() {
         answer: trimmed,
         extractedData: updates,
         timestamp: new Date().toISOString(),
-        phase: 'phase1-pillars',
+        phase: interview.phase,
         pillarKey: currentPillar,
       };
       const freshHistory = [...state.questionHistory, newEntry];
@@ -293,15 +315,35 @@ export default function QuickInterviewScreen() {
       setCustomAnswer('');
       setAiOptions([]);
 
-      const nextPhase1Index = interview.phase1Index + 1;
-      dispatch({ type: 'ADVANCE_PHASE1' });
-      const nextPhase: InterviewPhase =
-        nextPhase1Index >= PILLAR_ORDER.length ? 'complete' : 'phase1-pillars';
-      if (nextPhase === 'complete') {
-        dispatch({ type: 'SET_PHASE', payload: 'complete' });
+      // Advance the index for whichever phase we were in.
+      let nextPhase: InterviewPhase = interview.phase;
+      let nextPhase1Index = interview.phase1Index;
+      let nextPhase2Index = interview.phase2Index;
+
+      if (interview.phase === 'phase1-pillars') {
+        nextPhase1Index = interview.phase1Index + 1;
+        dispatch({ type: 'ADVANCE_PHASE1' });
+        if (nextPhase1Index >= PILLAR_ORDER.length) {
+          nextPhase = 'phase2-turning-points';
+          dispatch({ type: 'SET_PHASE', payload: 'phase2-turning-points' });
+        }
+      } else if (interview.phase === 'phase2-turning-points') {
+        nextPhase2Index = interview.phase2Index + 1;
+        dispatch({ type: 'ADVANCE_PHASE2' });
+        if (nextPhase2Index >= TURNING_POINT_ORDER.length) {
+          nextPhase = 'complete';
+          dispatch({ type: 'SET_PHASE', payload: 'complete' });
+        }
       }
 
-      await fetchNextQuestion(freshBible, freshHistory, nextPhase, nextPhase1Index, interview.beatCursor);
+      await fetchNextQuestion(
+        freshBible,
+        freshHistory,
+        nextPhase,
+        nextPhase1Index,
+        nextPhase2Index,
+        interview.beatCursor,
+      );
     } catch (error) {
       console.error('Error processing answer:', error);
       setLocalError(toFriendlyError(error));
@@ -320,23 +362,42 @@ export default function QuickInterviewScreen() {
         answer: '[Skipped]',
         extractedData: {},
         timestamp: new Date().toISOString(),
-        phase: 'phase1-pillars',
+        phase: interview.phase,
         pillarKey: state.currentQuestion.pillarKey,
       };
       const freshHistory = [...state.questionHistory, skipEntry];
       dispatch({ type: 'ADD_QUESTION_HISTORY', payload: skipEntry });
 
-      const nextPhase1Index = interview.phase1Index + 1;
-      dispatch({ type: 'ADVANCE_PHASE1' });
-      const nextPhase: InterviewPhase =
-        nextPhase1Index >= PILLAR_ORDER.length ? 'complete' : 'phase1-pillars';
-      if (nextPhase === 'complete') {
-        dispatch({ type: 'SET_PHASE', payload: 'complete' });
+      let nextPhase: InterviewPhase = interview.phase;
+      let nextPhase1Index = interview.phase1Index;
+      let nextPhase2Index = interview.phase2Index;
+
+      if (interview.phase === 'phase1-pillars') {
+        nextPhase1Index = interview.phase1Index + 1;
+        dispatch({ type: 'ADVANCE_PHASE1' });
+        if (nextPhase1Index >= PILLAR_ORDER.length) {
+          nextPhase = 'phase2-turning-points';
+          dispatch({ type: 'SET_PHASE', payload: 'phase2-turning-points' });
+        }
+      } else if (interview.phase === 'phase2-turning-points') {
+        nextPhase2Index = interview.phase2Index + 1;
+        dispatch({ type: 'ADVANCE_PHASE2' });
+        if (nextPhase2Index >= TURNING_POINT_ORDER.length) {
+          nextPhase = 'complete';
+          dispatch({ type: 'SET_PHASE', payload: 'complete' });
+        }
       }
 
       setCustomAnswer('');
       setAiOptions([]);
-      await fetchNextQuestion(undefined, freshHistory, nextPhase, nextPhase1Index, interview.beatCursor);
+      await fetchNextQuestion(
+        undefined,
+        freshHistory,
+        nextPhase,
+        nextPhase1Index,
+        nextPhase2Index,
+        interview.beatCursor,
+      );
     } catch (error) {
       console.error('Error skipping question:', error);
       setLocalError(toFriendlyError(error));
@@ -433,30 +494,44 @@ export default function QuickInterviewScreen() {
   if (!state.currentQuestion) return null;
 
   const question = state.currentQuestion;
+  const isPhase2 = interview.phase === 'phase2-turning-points';
+  const phaseTitle = isPhase2
+    ? 'Phase 2 · Key Dramatic Moments'
+    : 'Phase 1 · The Classic Story Pillars';
+  const phaseOrder = isPhase2 ? TURNING_POINT_ORDER : PILLAR_ORDER;
+  const phaseIndex = isPhase2 ? interview.phase2Index : interview.phase1Index;
+  const phaseSubtitle = isPhase2
+    ? `Question ${Math.min(phaseIndex + 1, phaseOrder.length)} of ${phaseOrder.length} — turning points that drive your beats`
+    : `Question ${Math.min(phaseIndex + 1, phaseOrder.length)} of ${phaseOrder.length} — broad strokes`;
 
   return (
     <Container maxWidth="lg">
-      <Header
-        title="Let's build your story foundation"
-        subtitle={`Question ${Math.min(interview.phase1Index + 1, PILLAR_ORDER.length)} of 7 — broad strokes`}
-      />
+      <Header title="Let's build your story foundation" subtitle={phaseSubtitle} />
 
       <div className="mb-4 p-4 bg-slate-800/40 border border-white/10 rounded-lg">
         <div className="flex items-center justify-between mb-3">
-          <h4 className="text-sm font-semibold text-cosmic-400">The Classic Story Pillars</h4>
+          <h4 className="text-sm font-semibold text-cosmic-400">{phaseTitle}</h4>
           <span className="text-xs text-slate-400">
-            {interview.phase1Index + 1} / {PILLAR_ORDER.length}
+            {phaseIndex + 1} / {phaseOrder.length}
           </span>
         </div>
         <div className="flex gap-2">
-          {PILLAR_ORDER.map((pillar, idx) => {
-            const done = idx < interview.phase1Index;
-            const current = idx === interview.phase1Index;
+          {phaseOrder.map((pillar, idx) => {
+            const done = idx < phaseIndex;
+            const current = idx === phaseIndex;
             return (
               <div
                 key={pillar}
                 className={`flex-1 h-2 rounded-full transition-all ${
-                  done ? 'bg-cosmic-400' : current ? 'bg-cosmic-500/60' : 'bg-slate-700'
+                  done
+                    ? isPhase2
+                      ? 'bg-amber-400'
+                      : 'bg-cosmic-400'
+                    : current
+                      ? isPhase2
+                        ? 'bg-amber-500/60'
+                        : 'bg-cosmic-500/60'
+                      : 'bg-slate-700'
                 }`}
                 title={BROAD_QUESTIONS[pillar].shortLabel}
               />
@@ -466,6 +541,14 @@ export default function QuickInterviewScreen() {
         <p className="mt-2 text-xs text-slate-400">
           {question.pillarKey ? BROAD_QUESTIONS[question.pillarKey].shortLabel : ''}
         </p>
+        {/* Tiny indicator: where we are in the overall journey */}
+        <div className="mt-3 flex items-center gap-1 text-[10px] text-slate-500 uppercase tracking-wider">
+          <span className={!isPhase2 ? 'text-cosmic-300' : ''}>Foundation</span>
+          <span>›</span>
+          <span className={isPhase2 ? 'text-amber-300' : ''}>Key Moments</span>
+          <span>›</span>
+          <span>Draft</span>
+        </div>
       </div>
 
       <Card>
@@ -573,7 +656,7 @@ export default function QuickInterviewScreen() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => dispatch({ type: 'SET_SCREEN', payload: 'initial-input' })}
+            onClick={() => dispatch({ type: 'SET_SCREEN', payload: 'format-confirmation' })}
             disabled={loading}
           >
             ← Back

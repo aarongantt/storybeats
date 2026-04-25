@@ -21,7 +21,6 @@ export type Screen =
   | 'quick-interview'
   | 'format-confirmation'
   | 'timeline-builder'
-  | 'expand-story'
   | 'what-next'
   | 'pitch';
 
@@ -31,7 +30,6 @@ const VALID_SCREENS: ReadonlySet<string> = new Set<Screen>([
   'quick-interview',
   'format-confirmation',
   'timeline-builder',
-  'expand-story',
   'what-next',
   'pitch',
 ]);
@@ -54,6 +52,7 @@ interface AppState {
 export const FRESH_INTERVIEW_STATE: InterviewState = {
   phase: 'phase1-pillars',
   phase1Index: 0,
+  phase2Index: 0,
   beatCursor: { beatNumber: 1, questionsAskedForBeat: 0 },
   suggestedAnswers: {},
   lastError: null,
@@ -66,25 +65,8 @@ export function deepMergeStoryBible(
 ): StoryBible {
   const merged: StoryBible = { ...current };
 
-  // MIGRATION: Convert old protagonist to characters array if needed
-  if (!merged.characters && merged.protagonist) {
-    merged.characters = [{
-      id: 'main-char-1',
-      role: 'main' as CharacterRole,
-      name: merged.protagonist.name,
-      description: merged.protagonist.description,
-      wants: merged.protagonist.want,
-      weaknesses: merged.protagonist.fears,
-      needs: merged.protagonist.need,
-      occupation: merged.protagonist.occupation,
-      background: merged.protagonist.background,
-      fears: merged.protagonist.fears,
-      motivations: merged.protagonist.motivations,
-      personality: merged.protagonist.personality,
-    }];
-  }
-
-  // Merge characters array intelligently
+  // Merge characters array intelligently (must run BEFORE the migration so
+  // updates targeting characters land before we sync from protagonist).
   if (updates.characters) {
     const existingChars = merged.characters || [];
     const updatedChars = updates.characters;
@@ -116,12 +98,67 @@ export function deepMergeStoryBible(
     merged.characters = mergedChars;
   }
 
-  // Keep old protagonist merging for backward compatibility
+  // Merge old-shape protagonist updates.
   if (updates.protagonist) {
     merged.protagonist = {
       ...current.protagonist,
       ...updates.protagonist,
     };
+  }
+
+  // Bootstrap a main character from the protagonist record when we have
+  // meaningful data and no character row yet. Empty `{}` (initial state)
+  // does NOT trigger this — only real protagonist data does.
+  const hasProtagonistData = !!(
+    merged.protagonist &&
+    (merged.protagonist.name ||
+      (merged.protagonist.description && merged.protagonist.description.length > 0) ||
+      merged.protagonist.occupation)
+  );
+  if (!merged.characters && hasProtagonistData && merged.protagonist) {
+    merged.characters = [
+      {
+        id: 'main-char-1',
+        role: 'main' as CharacterRole,
+        name: merged.protagonist.name,
+        description: merged.protagonist.description,
+        wants: merged.protagonist.want || merged.protagonist.goal,
+        needs: merged.protagonist.need,
+        occupation: merged.protagonist.occupation,
+        background: merged.protagonist.background,
+        fears: merged.protagonist.fears,
+        motivations: merged.protagonist.motivations,
+        personality: merged.protagonist.personality,
+        // weaknesses left undefined — extracted later by character hierarchy
+      },
+    ];
+  }
+
+  // Sync protagonist edits down to characters[0] so the two views can never
+  // drift. Specifically: when the name follow-up writes protagonist.name,
+  // the main character must reflect that name immediately.
+  if (updates.protagonist && merged.characters && merged.characters.length > 0) {
+    const mainIndex = merged.characters.findIndex((c) => c.role === 'main');
+    if (mainIndex >= 0) {
+      const main = merged.characters[mainIndex];
+      const synced = {
+        ...main,
+        name: updates.protagonist.name || main.name,
+        description: updates.protagonist.description || main.description,
+        occupation: updates.protagonist.occupation || main.occupation,
+        background: updates.protagonist.background || main.background,
+        fears: updates.protagonist.fears || main.fears,
+        motivations: updates.protagonist.motivations || main.motivations,
+        personality: updates.protagonist.personality || main.personality,
+        wants: updates.protagonist.goal || updates.protagonist.want || main.wants,
+        needs: updates.protagonist.need || main.needs,
+      };
+      merged.characters = [
+        ...merged.characters.slice(0, mainIndex),
+        synced,
+        ...merged.characters.slice(mainIndex + 1),
+      ];
+    }
   }
 
   // Merge world object deeply, accumulating rules array
@@ -179,11 +216,28 @@ export function deepMergeStoryBible(
   // Simple property updates
   if (updates.turningPoint) merged.turningPoint = updates.turningPoint;
   if (updates.endingVibe) merged.endingVibe = updates.endingVibe;
+  if (updates.inciting) merged.inciting = updates.inciting;
+  if (updates.midpointShift) merged.midpointShift = updates.midpointShift;
+  if (updates.lowestPoint) merged.lowestPoint = updates.lowestPoint;
+  if (updates.transformation) merged.transformation = updates.transformation;
 
   // Handle any additional dynamic properties
-  Object.keys(updates).forEach(key => {
+  Object.keys(updates).forEach((key) => {
     if (
-      !['protagonist', 'world', 'conflict', 'secondaryCharacters', 'theme', 'turningPoint', 'endingVibe'].includes(key)
+      ![
+        'protagonist',
+        'world',
+        'conflict',
+        'characters',
+        'secondaryCharacters',
+        'theme',
+        'turningPoint',
+        'endingVibe',
+        'inciting',
+        'midpointShift',
+        'lowestPoint',
+        'transformation',
+      ].includes(key)
     ) {
       (merged as any)[key] = (updates as any)[key];
     }
@@ -207,6 +261,7 @@ type AppAction =
   | { type: 'SET_INTERVIEW_STATE'; payload: Partial<InterviewState> }
   | { type: 'SET_SUGGESTED_ANSWERS'; payload: Partial<Record<PillarKey, SuggestedAnswer>> }
   | { type: 'ADVANCE_PHASE1' }
+  | { type: 'ADVANCE_PHASE2' }
   | { type: 'ADVANCE_BEAT_CURSOR'; payload?: BeatCursor }
   | { type: 'INCREMENT_BEAT_QUESTIONS' }
   | { type: 'SET_PHASE'; payload: InterviewPhase }
@@ -382,6 +437,18 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return next;
     }
 
+    case 'ADVANCE_PHASE2': {
+      const next = {
+        ...state,
+        interviewState: {
+          ...state.interviewState,
+          phase2Index: state.interviewState.phase2Index + 1,
+        },
+      };
+      persistInterview(state.currentProject?.id, next);
+      return next;
+    }
+
     case 'ADVANCE_BEAT_CURSOR': {
       const newCursor =
         action.payload ?? {
@@ -435,7 +502,16 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'RESTORE_INTERVIEW':
       return {
         ...state,
-        interviewState: action.payload.interviewState,
+        interviewState: {
+          // Defensive defaults for fields that may be missing on legacy blobs.
+          phase: action.payload.interviewState.phase ?? 'phase1-pillars',
+          phase1Index: action.payload.interviewState.phase1Index ?? 0,
+          phase2Index: action.payload.interviewState.phase2Index ?? 0,
+          beatCursor:
+            action.payload.interviewState.beatCursor ?? FRESH_INTERVIEW_STATE.beatCursor,
+          suggestedAnswers: action.payload.interviewState.suggestedAnswers ?? {},
+          lastError: action.payload.interviewState.lastError ?? null,
+        },
         questionHistory: action.payload.questionHistory,
         currentQuestion: action.payload.currentQuestion,
         questionCount: action.payload.questionCount,

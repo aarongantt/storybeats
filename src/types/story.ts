@@ -100,8 +100,13 @@ export interface StoryBible {
     role: string;
     relationship?: string;
   }>;
-  turningPoint?: string;
-  endingVibe?: string;
+  // Phase 2 dramatic anchors — feed into spine + beat generation prompts.
+  inciting?: string;        // What kicks the story off (Beat 3 anchor)
+  turningPoint?: string;    // The point of commitment (Beats 5-6 anchor)
+  midpointShift?: string;   // The midpoint twist/revelation (Beats 7-8 anchor)
+  lowestPoint?: string;     // The protagonist's rock bottom (Beat 10 anchor)
+  transformation?: string;  // How the protagonist is changed (Beats 11-12 anchor)
+  endingVibe?: string;      // How readers should feel at the end
   // Additional fields from "Expand Your Story"
   [key: string]: any;
 }
@@ -203,16 +208,26 @@ export interface QuestionHistory {
 // Interview Phase Model (broad-strokes → beat-driven adaptive)
 // ============================================================================
 
-export type InterviewPhase = 'phase1-pillars' | 'phase2-beats' | 'complete';
+export type InterviewPhase =
+  | 'phase1-pillars'
+  | 'phase2-turning-points'
+  | 'complete';
 
 export type PillarKey =
+  // Phase 1 — Foundation
   | 'protagonist'
   | 'want'
   | 'obstacle'
   | 'stakes'
   | 'settingTime'
   | 'tone'
-  | 'endingFeeling';
+  | 'endingFeeling'
+  // Phase 2 — Key Dramatic Moments
+  | 'incitingMoment'
+  | 'pointOfCommitment'
+  | 'midpointTwist'
+  | 'lowestPoint'
+  | 'transformation';
 
 export interface SuggestedAnswer {
   pillar: PillarKey;
@@ -227,8 +242,9 @@ export interface BeatCursor {
 
 export interface InterviewState {
   phase: InterviewPhase;
-  phase1Index: number; // 0..6 across the 7 pillars
-  beatCursor: BeatCursor;
+  phase1Index: number; // 0..6 across the 7 foundation pillars
+  phase2Index: number; // 0..4 across the 5 turning-point pillars
+  beatCursor: BeatCursor; // legacy — retained for migration safety
   suggestedAnswers: Partial<Record<PillarKey, SuggestedAnswer>>;
   lastError: string | null;
 }

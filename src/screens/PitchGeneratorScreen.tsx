@@ -30,7 +30,8 @@ export default function PitchGeneratorScreen() {
       const generatedPitch = await openaiService.generatePitch(
         state.currentProject.storyBible,
         state.currentProject.timeline.beats,
-        state.currentProject.format
+        state.currentProject.format,
+        state.currentProject.timeline.storySpine,
       );
 
       setPitch(generatedPitch);

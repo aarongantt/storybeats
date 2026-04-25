@@ -119,8 +119,8 @@ export default function FormatConfirmationScreen() {
   return (
     <Container maxWidth="xl">
       <Header
-        title="Let's start with the foundations"
-        subtitle="These details will help us ask smarter follow-up questions."
+        title="Quick check — what are we writing?"
+        subtitle="We'll use this to shape the outline. Anything we extracted from your idea is pre-filled — confirm or change it."
       />
 
       <div className="space-y-6">

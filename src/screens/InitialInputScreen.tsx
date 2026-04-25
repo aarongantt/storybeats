@@ -62,9 +62,11 @@ export default function InitialInputScreen() {
       }
       dispatch({ type: 'SET_SUGGESTED_ANSWERS', payload: suggestions });
 
-      // Route directly into the 7-pillar interview.
+      // Route to the format/tone confirmation step before the interview so we
+      // can capture format/genre/tone explicitly (used by the pitch and beat
+      // generation prompts).
       dispatch({ type: 'SET_PHASE', payload: 'phase1-pillars' });
-      dispatch({ type: 'SET_SCREEN', payload: 'quick-interview' });
+      dispatch({ type: 'SET_SCREEN', payload: 'format-confirmation' });
     } catch (error: any) {
       console.error('Error processing initial input:', error);
       const isAuth = error?.name === 'OpenAIAuthError';
