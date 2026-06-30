@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { TextArea } from './ui/Input';
+import { ErrorBanner } from './ErrorBanner';
 import { openaiService } from '../services/ai/openaiService';
+import { toFriendlyError, type FriendlyError } from '../services/ai/errorMapping';
 import type { Beat, StoryBible, BeatNumber, EmotionalTone, EmotionalDataPoint } from '../types/story';
 
 interface BeatCardProps {
@@ -11,6 +13,7 @@ interface BeatCardProps {
   previousBeats: Beat[];
   followingBeats?: Beat[];
   storySpine?: string;
+  projectMeta?: { format?: string; genres?: string[]; tones?: string[] };
   onUpdate: (beat: Partial<Beat>) => void;
   isExpanded: boolean;
   onToggleExpand: () => void;
@@ -22,6 +25,7 @@ export function BeatCard({
   previousBeats,
   followingBeats = [],
   storySpine,
+  projectMeta,
   onUpdate,
   isExpanded,
   onToggleExpand,
@@ -31,6 +35,7 @@ export function BeatCard({
   const [loading, setLoading] = useState(false);
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [alternatives, setAlternatives] = useState<string[]>([]);
+  const [error, setError] = useState<FriendlyError | null>(null);
 
   const handleWriteIt = () => {
     setIsEditing(true);
@@ -58,6 +63,7 @@ export function BeatCard({
 
   const handleSurpriseMe = async () => {
     setLoading(true);
+    setError(null);
     try {
       const suggestions = await openaiService.generateBeatWithContext(
         beat.number as BeatNumber,
@@ -66,14 +72,18 @@ export function BeatCard({
         previousBeats,
         followingBeats,
         storySpine,
+        projectMeta,
       );
 
       if (suggestions.length > 0) {
         setAlternatives(suggestions);
         setShowAlternatives(true);
+      } else {
+        setError({ message: 'The AI returned no options. Try again?', canRetry: true });
       }
-    } catch (error) {
-      console.error('Error generating beat:', error);
+    } catch (e) {
+      console.error('Error generating beat:', e);
+      setError(toFriendlyError(e));
     } finally {
       setLoading(false);
     }
@@ -119,7 +129,6 @@ export function BeatCard({
           updatedAt: new Date().toISOString(),
           source: 'ai-with-context',
         },
-        alternativeVersions: [...(beat.alternativeVersions || []), alternative],
       });
     } catch (error) {
       console.error('Failed to calculate emotional intensity:', error);
@@ -134,7 +143,6 @@ export function BeatCard({
           updatedAt: new Date().toISOString(),
           source: 'ai-with-context',
         },
-        alternativeVersions: [...(beat.alternativeVersions || []), alternative],
       });
     }
 
@@ -146,6 +154,7 @@ export function BeatCard({
     if (!beat.summary) return;
 
     setLoading(true);
+    setError(null);
     try {
       const suggestions = await openaiService.regenerateBeat(
         beat.number as BeatNumber,
@@ -154,20 +163,30 @@ export function BeatCard({
         previousBeats,
         followingBeats,
         storySpine,
+        projectMeta,
       );
 
       if (suggestions.length > 0) {
         setAlternatives(suggestions);
         setShowAlternatives(true);
+      } else {
+        setError({ message: 'The AI returned no options. Try again?', canRetry: true });
       }
-    } catch (error) {
-      console.error('Error regenerating beat:', error);
+    } catch (e) {
+      console.error('Error regenerating beat:', e);
+      setError(toFriendlyError(e));
     } finally {
       setLoading(false);
     }
   };
 
   const handleClear = () => {
+    if (
+      (beat.userWritten || beat.summary.trim()) &&
+      !window.confirm('Clear this beat? Your text will be lost.')
+    ) {
+      return;
+    }
     onUpdate({
       summary: '',
       status: 'empty',
@@ -228,6 +247,17 @@ export function BeatCard({
 
       {isExpanded && (
         <div className="space-y-4">
+          {error && (
+            <ErrorBanner
+              error={error}
+              onRetry={() => {
+                setError(null);
+                if (beat.summary) handleRegenerate();
+                else handleSurpriseMe();
+              }}
+              onDismiss={() => setError(null)}
+            />
+          )}
           {showAlternatives ? (
             <div className="space-y-3">
               <h4 className="font-medium text-cosmic-300">Choose a version:</h4>
@@ -269,7 +299,17 @@ export function BeatCard({
                 rows={4}
                 placeholder="Write what happens in this beat..."
                 autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && editValue.trim()) {
+                    e.preventDefault();
+                    handleSave();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    handleCancel();
+                  }
+                }}
               />
+              <p className="text-xs text-slate-500">⌘/Ctrl+Enter to save · Esc to cancel</p>
               <div className="flex gap-2">
                 <Button onClick={handleSave} disabled={!editValue.trim()}>
                   Save

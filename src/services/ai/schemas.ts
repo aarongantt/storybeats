@@ -39,7 +39,9 @@ export function validateQuestionResponse(raw: unknown): QuestionResponse {
 }
 
 export function validateStoryBibleExtraction(raw: unknown): Partial<StoryBible> {
-  if (!isObject(raw)) return {};
+  if (!isObject(raw)) {
+    throw new OpenAIValidationError('Story Bible extraction was not an object.');
+  }
 
   const result: Partial<StoryBible> = { world: {}, conflict: {} };
 
@@ -154,17 +156,28 @@ export interface AnswerOptions {
 
 export function validateAnswerOptions(raw: unknown): AnswerOptions {
   if (!isObject(raw)) throw new OpenAIValidationError('Expected object for answer options.');
-  const result = {
-    neutral: asString(raw.neutral) ?? '',
-    negative: asString(raw.negative) ?? '',
-    positive: asString(raw.positive) ?? '',
-    wildCard: asString(raw.wildCard) ?? '',
-  };
-  // At least one option must be non-empty.
-  if (!result.neutral && !result.negative && !result.positive && !result.wildCard) {
-    throw new OpenAIValidationError('Answer options were all empty.');
+  const neutral = asString(raw.neutral);
+  const negative = asString(raw.negative);
+  const positive = asString(raw.positive);
+  const wildCard = asString(raw.wildCard);
+  const missing: string[] = [];
+  if (!neutral) missing.push('neutral');
+  if (!negative) missing.push('negative');
+  if (!positive) missing.push('positive');
+  if (!wildCard) missing.push('wildCard');
+  // We expect all 4. Surface as validation error so the retry layer can
+  // re-request; the model occasionally drops one tone in a malformed payload.
+  if (missing.length >= 2) {
+    throw new OpenAIValidationError(
+      `Answer options missing required tones: ${missing.join(', ')}`,
+    );
   }
-  return result;
+  return {
+    neutral: neutral ?? '',
+    negative: negative ?? '',
+    positive: positive ?? '',
+    wildCard: wildCard ?? '',
+  };
 }
 
 export function validateBeatAlternatives(raw: unknown): AnswerOptions {
@@ -173,8 +186,13 @@ export function validateBeatAlternatives(raw: unknown): AnswerOptions {
 
 export function validatePitch(raw: unknown): Omit<PitchPackage, 'createdAt'> {
   if (!isObject(raw)) throw new OpenAIValidationError('Expected object for pitch response.');
+  const logline = asString(raw.logline);
+  // A pitch without a logline is unusable — fail loud so retry kicks in.
+  if (!logline) {
+    throw new OpenAIValidationError('Pitch response missing required logline.');
+  }
   return {
-    logline: asString(raw.logline) ?? '',
+    logline,
     shortSynopsis: asString(raw.shortSynopsis) ?? '',
     onePageSynopsis: asString(raw.onePageSynopsis) ?? '',
     numberedOutline: asString(raw.numberedOutline) ?? '',
@@ -240,9 +258,12 @@ export function validateEmotionalIntensity(raw: unknown): EmotionalIntensity {
   if (!isObject(raw)) throw new OpenAIValidationError('Expected object for emotional intensity.');
   const intensity = asNumber(raw.intensity);
   const tension = asNumber(raw.tension);
+  if (intensity === undefined || tension === undefined) {
+    throw new OpenAIValidationError('Emotional intensity response missing intensity or tension.');
+  }
   return {
-    intensity: intensity === undefined ? 0 : clamp(intensity, -10, 10),
-    tension: tension === undefined ? 5 : clamp(tension, 0, 10),
+    intensity: clamp(intensity, -10, 10),
+    tension: clamp(tension, 0, 10),
   };
 }
 

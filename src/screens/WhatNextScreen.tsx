@@ -37,32 +37,6 @@ export default function WhatNextScreen() {
           </div>
         </Card>
 
-        <Card className="opacity-60">
-          <div className="flex items-start gap-4">
-            <div className="flex-shrink-0 text-3xl">✨</div>
-            <div className="flex-1">
-              <h3 className="text-xl font-semibold mb-2">Refine Your Story</h3>
-              <p className="text-slate-300">
-                Tighten plot, add twists, improve antagonist, shift tone
-              </p>
-              <p className="text-xs text-slate-500 mt-2">Coming soon</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="opacity-60">
-          <div className="flex items-start gap-4">
-            <div className="flex-shrink-0 text-3xl">🔄</div>
-            <div className="flex-1">
-              <h3 className="text-xl font-semibold mb-2">Transform Format</h3>
-              <p className="text-slate-300">
-                Convert your story to a different format (Film → Book, etc.)
-              </p>
-              <p className="text-xs text-slate-500 mt-2">Coming soon</p>
-            </div>
-          </div>
-        </Card>
-
         <Card hover onClick={handleBackToTimeline} className="cursor-pointer border-cosmic-500/30">
           <div className="flex items-start gap-4">
             <div className="flex-shrink-0 text-3xl">📖</div>

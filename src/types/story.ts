@@ -107,8 +107,6 @@ export interface StoryBible {
   lowestPoint?: string;     // The protagonist's rock bottom (Beat 10 anchor)
   transformation?: string;  // How the protagonist is changed (Beats 11-12 anchor)
   endingVibe?: string;      // How readers should feel at the end
-  // Additional fields from "Expand Your Story"
-  [key: string]: any;
 }
 
 export interface Beat {
@@ -119,7 +117,7 @@ export interface Beat {
   userWritten: boolean;
   locked: boolean;
   status: BeatStatus;
-  alternativeVersions: string[]; // AI suggestions history
+  alternativeVersions?: string[]; // Deprecated — was never read; kept optional for back-compat with persisted projects.
   // NEW: Emotional tracking
   emotionalData?: EmotionalDataPoint;
   selectedTone?: EmotionalTone;

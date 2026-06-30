@@ -32,7 +32,10 @@ export default function WelcomeScreen() {
             </div>
             <div>
               <h3 className="font-semibold text-white">Quick AI Interview</h3>
-              <p className="text-sm text-slate-400">Answer 5-10 smart questions to build your story foundation</p>
+              <p className="text-sm text-slate-400">
+                Confirm your format and tone, then answer up to 12 smart questions across two phases —
+                story foundation and key dramatic moments. We skip anything we can already infer from your idea.
+              </p>
             </div>
           </div>
 

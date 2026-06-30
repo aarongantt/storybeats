@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useProject } from '../context/ProjectContext';
 import { Container } from '../components/layout/Container';
 import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { ErrorBanner } from '../components/ErrorBanner';
 import { StoryHeartbeat } from '../components/StoryHeartbeat';
 import { StoryHealthPanel } from '../components/StoryHealthPanel';
 import { openaiService } from '../services/ai/openaiService';
+import { toFriendlyError, type FriendlyError } from '../services/ai/errorMapping';
 import { calculateStoryHealth } from '../utils/storyHealth';
 import type { PitchPackage } from '../types/story';
 
@@ -15,6 +17,7 @@ export default function PitchGeneratorScreen() {
   const [loading, setLoading] = useState(false);
   const [pitch, setPitch] = useState<PitchPackage | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<'logline' | 'short' | 'onepage' | 'outline'>('logline');
+  const [aiError, setAiError] = useState<FriendlyError | null>(null);
 
   useEffect(() => {
     if (state.currentProject?.pitch) {
@@ -26,12 +29,18 @@ export default function PitchGeneratorScreen() {
     if (!state.currentProject) return;
 
     setLoading(true);
+    setAiError(null);
     try {
       const generatedPitch = await openaiService.generatePitch(
         state.currentProject.storyBible,
         state.currentProject.timeline.beats,
         state.currentProject.format,
         state.currentProject.timeline.storySpine,
+        {
+          format: state.currentProject.format,
+          genres: state.currentProject.genres,
+          tones: state.currentProject.tones,
+        },
       );
 
       setPitch(generatedPitch);
@@ -42,7 +51,7 @@ export default function PitchGeneratorScreen() {
       });
     } catch (error) {
       console.error('Error generating pitch:', error);
-      dispatch({ type: 'SET_ERROR', payload: 'Failed to generate pitch' });
+      setAiError(toFriendlyError(error));
     } finally {
       setLoading(false);
     }
@@ -86,6 +95,18 @@ export default function PitchGeneratorScreen() {
         subtitle="Export your story in professional formats"
       />
 
+      {aiError && (
+        <div className="mb-4">
+          <ErrorBanner
+            error={aiError}
+            onRetry={() => {
+              setAiError(null);
+              handleGenerate();
+            }}
+            onDismiss={() => setAiError(null)}
+          />
+        </div>
+      )}
       {!pitch ? (
         <Card className="text-center py-12">
           <h3 className="text-xl font-semibold mb-4">Ready to generate your pitch?</h3>
@@ -165,7 +186,20 @@ export default function PitchGeneratorScreen() {
             <Button variant="ghost" onClick={handleBack}>
               ← Back
             </Button>
-            <Button variant="outline" onClick={handleGenerate} disabled={loading}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (
+                  !pitch ||
+                  window.confirm(
+                    'Regenerate pitch? Your current logline, synopsis, and outline will be replaced.',
+                  )
+                ) {
+                  handleGenerate();
+                }
+              }}
+              disabled={loading}
+            >
               🔄 Regenerate
             </Button>
           </div>

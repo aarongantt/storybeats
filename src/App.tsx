@@ -44,6 +44,13 @@ function App() {
   }, []);
 
   const handleResetApiKey = () => {
+    if (
+      !window.confirm(
+        'This will erase your API key AND every saved project from this browser. Continue?',
+      )
+    ) {
+      return;
+    }
     // Clear all localStorage data (API key, projects, preferences)
     storageService.clearAll();
     // Reset React state
@@ -127,7 +134,10 @@ function App() {
       {/* Main Content - adjusted for debug panels */}
       <div className="pl-80 pr-80">
         {state.error && (
-          <div className="fixed top-4 right-96 bg-red-500/90 text-white px-6 py-4 rounded-lg shadow-lg z-50 max-w-md">
+          <div
+            role="alert"
+            className="fixed bottom-4 right-4 bg-red-500/95 text-white px-6 py-4 rounded-lg shadow-lg z-[110] max-w-[calc(100vw-2rem)] sm:max-w-md"
+          >
             <div className="flex items-start gap-3">
               <span className="text-xl">⚠️</span>
               <div className="flex-1">
@@ -135,6 +145,7 @@ function App() {
                 <p className="text-sm mt-1">{state.error}</p>
                 {state.error.toLowerCase().includes('api key') && (
                   <button
+                    type="button"
                     onClick={handleResetApiKey}
                     className="mt-3 text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded transition-colors"
                   >
@@ -143,6 +154,8 @@ function App() {
                 )}
               </div>
               <button
+                type="button"
+                aria-label="Dismiss error"
                 onClick={() => dispatch({ type: 'SET_ERROR', payload: null })}
                 className="text-white/80 hover:text-white"
               >

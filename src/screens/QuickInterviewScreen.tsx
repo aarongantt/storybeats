@@ -5,14 +5,8 @@ import { Header } from '../components/layout/Header';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { TextArea } from '../components/ui/Input';
-import { openaiService } from '../services/ai/openaiService';
-import {
-  OpenAITimeoutError,
-  OpenAIRateLimitError,
-  OpenAIValidationError,
-  OpenAIAuthError,
-  OpenAIServerError,
-} from '../services/ai/retry';
+import { openaiService, looksLikePlot } from '../services/ai/openaiService';
+import { toFriendlyError, type FriendlyError } from '../services/ai/errorMapping';
 import {
   PILLAR_ORDER,
   TURNING_POINT_ORDER,
@@ -27,31 +21,6 @@ import type {
   BeatCursor,
   InterviewPhase,
 } from '../types/story';
-
-interface FriendlyError {
-  message: string;
-  canRetry: boolean;
-}
-
-function toFriendlyError(error: unknown): FriendlyError {
-  if (error instanceof OpenAITimeoutError) {
-    return { message: 'The AI is taking too long. Try again?', canRetry: true };
-  }
-  if (error instanceof OpenAIRateLimitError) {
-    return { message: 'Rate limit hit. Wait a moment and try again.', canRetry: true };
-  }
-  if (error instanceof OpenAIValidationError) {
-    return { message: 'The AI returned an unexpected response. Try again?', canRetry: true };
-  }
-  if (error instanceof OpenAIAuthError) {
-    return { message: 'Your API key is invalid. Please reset it.', canRetry: false };
-  }
-  if (error instanceof OpenAIServerError) {
-    return { message: 'OpenAI is having trouble right now. Try again?', canRetry: true };
-  }
-  if (error instanceof Error) return { message: error.message, canRetry: true };
-  return { message: 'Something went wrong. Try again?', canRetry: true };
-}
 
 type DraftStage = 'spine' | 'beats' | 'characters' | 'done';
 
@@ -170,7 +139,11 @@ export default function QuickInterviewScreen() {
     setDrafting('spine');
     let spine: string | undefined;
     try {
-      spine = await openaiService.generateStorySpine(workingBible, state.currentProject.format);
+      spine = await openaiService.generateStorySpine(workingBible, {
+        format: state.currentProject.format,
+        genres: state.currentProject.genres,
+        tones: state.currentProject.tones,
+      });
       dispatch({
         type: 'UPDATE_PROJECT',
         payload: {
@@ -191,6 +164,11 @@ export default function QuickInterviewScreen() {
         state.currentProject.timeline.beats,
         workingBible,
         spine,
+        {
+          format: state.currentProject.format,
+          genres: state.currentProject.genres,
+          tones: state.currentProject.tones,
+        },
       );
       for (const [beatNumber, data] of Object.entries(completions)) {
         const num = parseInt(beatNumber, 10);
@@ -268,18 +246,32 @@ export default function QuickInterviewScreen() {
 
       let freshBible = deepMergeStoryBible(state.currentProject.storyBible, updates);
 
-      // Phase 1 fallback: if analyzeResponse didn't populate the canonical
-      // field for this pillar, write the raw answer in. If the question
-      // targets a specific sub-field (e.g. a name follow-up), prefer that
-      // path over the pillar's default.
+      // Fallback: only write the raw user answer if analyzeResponse didn't
+      // populate the canonical field. NEVER clobber an AI-extracted clean
+      // value with the user's raw paragraph. For pillars whose value is
+      // supposed to be a clean clause (not plot), skip the raw write if the
+      // answer reads like plot — analyzeResponse will have cleaned it.
+      const PLOT_GUARDED_PILLARS = new Set([
+        'want',
+        'incitingMoment',
+        'pointOfCommitment',
+        'midpointTwist',
+        'lowestPoint',
+        'transformation',
+      ]);
+      let shouldFallbackWrite = false;
+      let primaryPath = '';
       if (currentPillar) {
-        const primaryPath =
+        primaryPath =
           question.fallbackBiblePath ?? PILLAR_TO_BIBLE_PATH[currentPillar][0];
         const exists = primaryPath.split('.').reduce<any>(
           (acc, key) => (acc == null ? acc : acc[key]),
           freshBible,
         );
-        if (!exists) {
+        const wouldPoisonWithPlot =
+          PLOT_GUARDED_PILLARS.has(currentPillar) && looksLikePlot(trimmed);
+        shouldFallbackWrite = !exists && !wouldPoisonWithPlot;
+        if (shouldFallbackWrite) {
           freshBible = JSON.parse(JSON.stringify(freshBible));
           setNestedValue(freshBible, primaryPath, trimmed);
         }
@@ -298,9 +290,7 @@ export default function QuickInterviewScreen() {
       dispatch({ type: 'ADD_QUESTION_HISTORY', payload: newEntry });
       dispatch({ type: 'INCREMENT_QUESTION_COUNT' });
       dispatch({ type: 'UPDATE_STORY_BIBLE', payload: updates });
-      if (currentPillar) {
-        const primaryPath =
-          question.fallbackBiblePath ?? PILLAR_TO_BIBLE_PATH[currentPillar][0];
+      if (shouldFallbackWrite && primaryPath) {
         const pathParts = primaryPath.split('.');
         const patch: any = {};
         let cursorObj = patch;
@@ -414,6 +404,11 @@ export default function QuickInterviewScreen() {
       const options = await openaiService.generateAIAnswerOptions(
         state.currentQuestion,
         state.currentProject.storyBible,
+        {
+          format: state.currentProject.format,
+          genres: state.currentProject.genres,
+          tones: state.currentProject.tones,
+        },
       );
       setAiOptions(options);
     } catch (error) {
@@ -617,10 +612,17 @@ export default function QuickInterviewScreen() {
                 disabled={loading}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && customAnswer.trim()) {
+                    e.preventDefault();
                     handleAnswer(customAnswer);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setCustomAnswer('');
                   }
                 }}
               />
+              <p className="text-xs text-slate-500">
+                ⌘/Ctrl+Enter to submit · Esc to clear
+              </p>
               {customAnswer.trim() && (
                 <Button onClick={() => handleAnswer(customAnswer)} disabled={loading} fullWidth>
                   Submit answer

@@ -15,7 +15,8 @@ import type {
 } from '../../types/story';
 import { PILLAR_ORDER, TURNING_POINT_ORDER } from '../../constants/broadQuestions';
 import { BROAD_QUESTIONS } from '../../constants/broadQuestions';
-import { withResilience } from './retry';
+import { BEAT_CONTRACTS } from '../../constants/beatContracts';
+import { withResilience, OpenAIValidationError } from './retry';
 import {
   validateStoryBibleExtraction,
   validateAnalyzeResponse,
@@ -37,6 +38,56 @@ interface CallJSONOptions {
   temperature?: number;
   timeoutMs?: number;
   maxAttempts?: number;
+  system?: string;
+}
+
+// Default voice / style preamble. Anchors the model to "story editor", not
+// "general assistant", and warns away from the most-flagged AI-prose tics.
+const DEFAULT_SYSTEM = `You are a story-structure editor working alongside a writer. You write tight, specific, concrete prose. Every sentence advances cause and effect.
+
+Avoid AI-prose tics: em-dashes used for drama; the phrases "in a world where", "little did they know", "unbeknownst", "a testament to"; three-adjective stacks ("dark, brooding, mysterious"); and the formula "X — not Y, but Z". Prefer plain, specific verbs over stacked descriptors.`;
+
+interface ProjectMetadata {
+  format?: string;
+  genres?: string[];
+  tones?: string[];
+}
+
+/**
+ * Build a one-line PROJECT block to prepend to generative prompts so every
+ * call shares the user-chosen format/genre/tone palette.
+ */
+function projectBlock(meta: ProjectMetadata | undefined): string {
+  if (!meta) return '';
+  const parts: string[] = [];
+  if (meta.format) parts.push(`FORMAT: ${meta.format}`);
+  if (meta.genres && meta.genres.length) parts.push(`GENRES: ${meta.genres.join(', ')}`);
+  if (meta.tones && meta.tones.length) parts.push(`TONES: ${meta.tones.join(', ')}`);
+  return parts.length ? `${parts.join(' | ')}\n\n` : '';
+}
+
+/**
+ * Build the Phase 2 → beat anchor map. Shared by generateBeatWithContext and
+ * autoCompleteBeats so single-beat regeneration honors the same anchors the
+ * full-draft pass does.
+ */
+function buildAnchorMap(storyBible: Partial<StoryBible>): Record<number, string> {
+  const anchorMap: Record<number, string> = {};
+  if (storyBible.inciting) anchorMap[3] = `INCITING MOMENT: ${storyBible.inciting}`;
+  if (storyBible.turningPoint) {
+    anchorMap[5] = `POINT OF COMMITMENT: ${storyBible.turningPoint}`;
+    anchorMap[6] = `(continues from the point of commitment in beat 5)`;
+  }
+  if (storyBible.midpointShift) {
+    anchorMap[7] = `MIDPOINT TWIST setup: ${storyBible.midpointShift}`;
+    anchorMap[8] = `MIDPOINT TWIST revelation: ${storyBible.midpointShift}`;
+  }
+  if (storyBible.lowestPoint) anchorMap[10] = `LOWEST POINT: ${storyBible.lowestPoint}`;
+  if (storyBible.transformation) {
+    anchorMap[11] = `TRANSFORMATION begins: ${storyBible.transformation}`;
+    anchorMap[12] = `TRANSFORMATION lands: ${storyBible.transformation}`;
+  }
+  return anchorMap;
 }
 
 class OpenAIService {
@@ -83,7 +134,10 @@ class OpenAIService {
         const response = await client.chat.completions.create(
           {
             model: opts.model ?? 'gpt-4o',
-            messages: [{ role: 'user', content: prompt }],
+            messages: [
+              { role: 'system', content: opts.system ?? DEFAULT_SYSTEM },
+              { role: 'user', content: prompt },
+            ],
             response_format: { type: 'json_object' },
             temperature: opts.temperature ?? 0.7,
           },
@@ -92,7 +146,10 @@ class OpenAIService {
 
         this.trackTokens(operation, response.usage);
 
-        const content = response.choices[0]?.message?.content ?? '{}';
+        const content = response.choices[0]?.message?.content;
+        if (!content || !content.trim()) {
+          throw new OpenAIValidationError(`Empty response content from OpenAI (${operation}).`);
+        }
         return JSON.parse(content);
       },
       {
@@ -199,7 +256,9 @@ Return JSON. Omit fields you cannot extract. Do NOT invent. Here is the shape:
   "secondaryCharacters": [{"name":"...","role":"...","relationship":"..."}]
 }`;
 
-    return this.callJSON(prompt, validateStoryBibleExtraction, 'Extract Story Bible', { temperature: 0.4 });
+    return this.callJSON(prompt, validateStoryBibleExtraction, 'Extract Story Bible', {
+      temperature: 0.2,
+    });
   }
 
   async analyzeResponse(
@@ -207,13 +266,30 @@ Return JSON. Omit fields you cannot extract. Do NOT invent. Here is the shape:
     answer: string,
     currentBible: Partial<StoryBible>,
   ): Promise<Partial<StoryBible>> {
+    // Slim grounding context — we explicitly tell the model not to read this
+    // for content, only to anchor pronouns. No need to ship the full bible.
+    const main =
+      currentBible.characters?.find((c) => c.role === 'main') ?? currentBible.characters?.[0];
+    const slim = {
+      protagonist: main?.name || currentBible.protagonist?.name
+        ? {
+            name: main?.name || currentBible.protagonist?.name,
+            occupation: main?.occupation || currentBible.protagonist?.occupation,
+          }
+        : undefined,
+      world: currentBible.world?.setting ? { setting: currentBible.world.setting } : undefined,
+      conflict: currentBible.conflict?.antagonist
+        ? { antagonist: currentBible.conflict.antagonist }
+        : undefined,
+    };
+
     const prompt = `Extract ALL relevant story information from this Q&A and return fields to merge into the Story Bible.
 
 QUESTION: ${question.text}
 ANSWER: ${answer}
 
-CURRENT STORY BIBLE (for reference only — do not repeat existing values):
-${JSON.stringify(currentBible, null, 2)}
+PROTAGONIST CONTEXT (for grounding pronouns only — do NOT copy these into the output):
+${JSON.stringify(slim)}
 
 EXTRACTION RULES:
 1. Extract protagonist details mentioned in the answer: name, description, goals, wants, needs, occupation, background, fears, motivations, personality
@@ -222,7 +298,9 @@ EXTRACTION RULES:
 4. Extract secondary characters with their relationships
 5. If the answer describes tone/mood, populate "theme"
 6. If the answer describes the desired ending feeling, populate "endingVibe"
-7. Return ONLY fields that should be updated or added. Omit fields not mentioned in the answer.
+7. If the answer describes a specific turning point, populate the matching anchor field (inciting / turningPoint / midpointShift / lowestPoint / transformation).
+8. Return ONLY fields that should be updated or added. Omit fields not mentioned in the answer.
+9. Preserve the user's wording where possible — do NOT rephrase or reinterpret.
 
 Return JSON with this shape (all fields optional):
 {
@@ -239,7 +317,7 @@ Return JSON with this shape (all fields optional):
   "secondaryCharacters": [{"name":"...","role":"...","relationship":"..."}]
 }`;
 
-    return this.callJSON(prompt, validateAnalyzeResponse, 'Analyze Response');
+    return this.callJSON(prompt, validateAnalyzeResponse, 'Analyze Response', { temperature: 0.4 });
   }
 
   // ==========================================================================
@@ -249,21 +327,22 @@ Return JSON with this shape (all fields optional):
   async generateAIAnswerOptions(
     question: Question,
     storyBible: Partial<StoryBible>,
+    projectMeta?: ProjectMetadata,
   ): Promise<string[]> {
-    const prompt = `You are helping a user develop their story. Generate 4 creative answer options for this question with different tones.
+    const prompt = `You are helping a user develop their story. Generate 4 answer options for this question, each with a different tonal lean — but all within the user's chosen palette.
 
-QUESTION: ${question.text}
+${projectBlock(projectMeta)}QUESTION: ${question.text}
 
 CURRENT STORY CONTEXT:
-${JSON.stringify(storyBible, null, 2)}
+${JSON.stringify(storyBible)}
 
-Generate EXACTLY 4 answer options with different tones:
-1. NEUTRAL: Balanced, straightforward, middle-ground
-2. NEGATIVE: Darker, more conflicted, adds complications
-3. POSITIVE: Lighter, more hopeful, optimistic
-4. WILD-CARD: Genre-bending plot twist — surprising but coherent
+Generate EXACTLY 4 answer options:
+1. NEUTRAL: balanced — the most straightforward option that fits the genres and tones above
+2. NEGATIVE: the most conflicted / dark option that still fits the palette
+3. POSITIVE: the most hopeful option that still fits the palette
+4. WILD-CARD: the most genre-bending plot twist that REMAINS coherent with the established stakes
 
-All options should fit the context and be concise (1-2 sentences).
+All options 1-2 sentences. Be concrete and specific to THIS story (use the protagonist by name if known). Avoid generic phrasings.
 
 Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."}`;
 
@@ -278,17 +357,29 @@ Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."
     previousBeats: Beat[],
     followingBeats: Beat[] = [],
     storySpine?: string,
+    projectMeta?: ProjectMetadata,
   ): Promise<string[]> {
     const mainCharacter = storyBible.characters?.[0] || storyBible.protagonist;
     const antagonist = storyBible.characters?.find((c) => c.role === 'antagonist');
     const prevLast = previousBeats.length > 0 ? previousBeats[previousBeats.length - 1] : null;
 
+    const contract = BEAT_CONTRACTS[beatNumber];
+    const anchorMap = buildAnchorMap(storyBible);
+    const anchor = anchorMap[beatNumber];
+
     const prompt = `You are writing Beat #${beatNumber} ("${beatTitle}") of a 12-beat story outline. Your job is to keep the narrative flowing — this beat must read as a causal continuation of what came before and a causal setup for what comes after.
 
-${storySpine ? `STORY SPINE (the causal backbone — respect it):\n${storySpine}\n\n` : ''}STORY BIBLE:
-${JSON.stringify(storyBible, null, 2)}
+${projectBlock(projectMeta)}${storySpine ? `STORY SPINE (the causal backbone — respect it):\n${storySpine}\n\n` : ''}STORY BIBLE:
+${JSON.stringify(storyBible)}
 
-PREVIOUS BEATS (in order):
+BEAT JOB (contract for Beat ${beatNumber}):
+- Purpose: ${contract.purpose}
+- Structural obligation: ${contract.structuralObligation}
+- Required change: BEFORE = "${contract.requiredChange.before}" → AFTER = "${contract.requiredChange.after}"
+- Must NOT include: ${contract.mustNotInclude.join(', ') || 'none'}
+- Must NOT resolve: ${contract.mustNotResolve.join(', ') || 'none'}
+
+${anchor ? `ANCHOR FOR THIS BEAT (this MUST be the source material — all 4 alternatives dramatize this):\n${anchor}\n\n` : ''}PREVIOUS BEATS (in order):
 ${previousBeats.length ? previousBeats.map((b) => `Beat ${b.number}: ${b.summary}`).join('\n\n') : '(none yet)'}
 ${prevLast ? `\nImmediately prior ending: "${prevLast.summary.split(/(?<=[.!?])\s+/).slice(-1)[0]}"` : ''}
 
@@ -302,11 +393,11 @@ CONTINUITY RULES (CRITICAL):
 - Use the protagonist's EXACT name (${mainCharacter?.name || 'the protagonist'}) and specifics (setting: ${storyBible.world?.setting || 'established'}, antagonist: ${antagonist?.name || storyBible.conflict?.antagonist || 'established'}).
 - Each option should be 2–3 sentences. Write with narrative momentum, not as a summary bullet.
 
-Generate 4 options with different tonal choices:
-1. NEUTRAL: Balanced progression, the default path
-2. NEGATIVE: Setbacks, complications, darker turn
-3. POSITIVE: Progress, hope, lighter turn
-4. WILD-CARD: Unexpected twist, still grounded in the spine
+Generate 4 options — each fits the FORMAT/GENRES/TONES above; the labels describe the tonal lean WITHIN that palette:
+1. NEUTRAL: balanced progression — the most straightforward fit for this beat
+2. NEGATIVE: setbacks, complications, darker fit within the palette
+3. POSITIVE: progress, hope, lighter fit within the palette
+4. WILD-CARD: an unexpected twist that still honors the contract above
 
 Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."}`;
 
@@ -321,6 +412,7 @@ Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."
     previousBeats: Beat[],
     followingBeats: Beat[] = [],
     storySpine?: string,
+    projectMeta?: ProjectMetadata,
   ): Promise<string[]> {
     return this.generateBeatWithContext(
       beatNumber,
@@ -329,6 +421,7 @@ Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."
       previousBeats,
       followingBeats,
       storySpine,
+      projectMeta,
     );
   }
 
@@ -337,7 +430,12 @@ Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."
    * This is the Dramatron / Sudowrite Story Engine pattern: derive a synopsis
    * before the beats so each beat has a shared narrative target.
    */
-  async generateStorySpine(storyBible: StoryBible, format?: string): Promise<string> {
+  async generateStorySpine(
+    storyBible: StoryBible,
+    formatOrMeta?: string | ProjectMetadata,
+  ): Promise<string> {
+    const meta: ProjectMetadata | undefined =
+      typeof formatOrMeta === 'string' ? { format: formatOrMeta } : formatOrMeta;
     const main = storyBible.characters?.find((c) => c.role === 'main') ?? storyBible.characters?.[0];
     const mainName = main?.name || storyBible.protagonist?.name || 'the protagonist';
 
@@ -350,12 +448,13 @@ Return JSON: {"neutral":"...","negative":"...","positive":"...","wildCard":"..."
 
     const prompt = `Write a story spine: the causal backbone of this story in 5-7 sentences. Each sentence must flow from the previous. Use the Pixar "Once upon a time / Every day / Until one day / Because of that / Because of that / Until finally / Ever since" scaffold as a guide (you can drop or rearrange beats), but output prose, not labeled lines.
 
-STORY BIBLE:
-${JSON.stringify(storyBible, null, 2)}
+${projectBlock(meta)}STORY BIBLE:
+${JSON.stringify(storyBible)}
 
-${anchors.length ? `KEY DRAMATIC ANCHORS (the spine must respect these — these ARE the turning points):\n${anchors.join('\n')}\n\n` : ''}${format ? `FORMAT: ${format}\n` : ''}REQUIREMENTS:
+${anchors.length ? `KEY DRAMATIC ANCHORS (the spine must respect these — these ARE the turning points):\n${anchors.join('\n')}\n\n` : ''}REQUIREMENTS:
 - Use ${mainName} by name.
 - Establish the setting in the first sentence.
+- Honor the FORMAT/GENRES/TONES above as a tonal palette throughout.
 - The middle sentences must escalate: each sentence describes a cause or consequence of the previous one.
 - Weave the dramatic anchors above into the appropriate sentences (inciting moment early, midpoint twist around the middle, lowest point near the end, transformation in the final sentence).
 - The final sentence must land on the emotional ending the user intends (${storyBible.endingVibe || 'resolution'}).
@@ -372,6 +471,7 @@ Return JSON: {"spine":"<the prose spine>"}`;
     beats: Beat[],
     format: string,
     storySpine?: string,
+    projectMeta?: ProjectMetadata,
   ): Promise<PitchPackage> {
     const beatsText = beats
       .filter((b) => b.status === 'complete')
@@ -381,15 +481,17 @@ Return JSON: {"spine":"<the prose spine>"}`;
     const main = storyBible.characters?.find((c) => c.role === 'main') ?? storyBible.characters?.[0];
     const protagonistName = main?.name || storyBible.protagonist?.name || 'the protagonist';
 
+    // Merge the explicit format arg into the metadata block so projectBlock
+    // picks up genres + tones too.
+    const meta: ProjectMetadata = { format, ...(projectMeta ?? {}) };
+
     const prompt = `Generate a pitch package for this story.
 
-${storySpine ? `STORY SPINE (the causal backbone — every output below must honor this arc):\n${storySpine}\n\n` : ''}STORY BEATS (in order):
+${projectBlock(meta)}${storySpine ? `STORY SPINE (the causal backbone — every output below must honor this arc):\n${storySpine}\n\n` : ''}STORY BEATS (in order):
 ${beatsText}
 
 STORY BIBLE:
-${JSON.stringify(storyBible, null, 2)}
-
-FORMAT: ${format}
+${JSON.stringify(storyBible)}
 
 REQUIREMENTS:
 - Logline: ONE sentence. Name the protagonist (${protagonistName}), their want, and the central opposition. No subplots, no theme talk.
@@ -418,10 +520,13 @@ Return JSON: {"logline":"...","shortSynopsis":"...","onePageSynopsis":"...","num
     beats: Beat[],
     storyBible: StoryBible,
     storySpine?: string,
+    projectMeta?: ProjectMetadata,
   ): Promise<Record<number, { summary: string; intensity?: number; tension?: number }>> {
     // Locked beats and beats the user explicitly completed are treated as canon.
     const fixed = beats.filter((b) => b.locked || (b.summary && b.status === 'complete'));
-    const toGenerate = beats.filter((b) => !b.locked && (!b.summary || b.status === 'empty' || b.status === 'incomplete'));
+    const toGenerate = beats.filter(
+      (b) => !b.locked && (!b.summary || b.status === 'empty' || b.status === 'incomplete'),
+    );
     if (toGenerate.length === 0) return {};
 
     const main = storyBible.characters?.find((c) => c.role === 'main') ?? storyBible.characters?.[0];
@@ -429,25 +534,7 @@ Return JSON: {"logline":"...","shortSynopsis":"...","onePageSynopsis":"...","num
     const antagonist = storyBible.characters?.find((c) => c.role === 'antagonist');
     const antagonistName = antagonist?.name || storyBible.conflict?.antagonist;
 
-    // Map dramatic anchors to the beats they belong to. The model will be
-    // told to use these as the source material for the relevant beat — this
-    // is the difference between "AI invents a midpoint" and "AI dramatizes
-    // the midpoint the user described."
-    const anchorMap: Record<number, string> = {};
-    if (storyBible.inciting) anchorMap[3] = `INCITING MOMENT: ${storyBible.inciting}`;
-    if (storyBible.turningPoint) {
-      anchorMap[5] = `POINT OF COMMITMENT: ${storyBible.turningPoint}`;
-      anchorMap[6] = `(continues from the point of commitment in beat 5)`;
-    }
-    if (storyBible.midpointShift) {
-      anchorMap[7] = `MIDPOINT TWIST setup: ${storyBible.midpointShift}`;
-      anchorMap[8] = `MIDPOINT TWIST revelation: ${storyBible.midpointShift}`;
-    }
-    if (storyBible.lowestPoint) anchorMap[10] = `LOWEST POINT: ${storyBible.lowestPoint}`;
-    if (storyBible.transformation) {
-      anchorMap[11] = `TRANSFORMATION begins: ${storyBible.transformation}`;
-      anchorMap[12] = `TRANSFORMATION lands: ${storyBible.transformation}`;
-    }
+    const anchorMap = buildAnchorMap(storyBible);
 
     const beatSkeleton = beats
       .map((b) => {
@@ -455,14 +542,19 @@ Return JSON: {"logline":"...","shortSynopsis":"...","onePageSynopsis":"...","num
         const anchor = anchorMap[b.number];
         const anchorTag = anchor ? `\n    ↳ ${anchor}` : '';
         if (isFixed) return `Beat ${b.number} — "${b.title}" [CANON, DO NOT CHANGE]: ${b.summary}`;
-        return `Beat ${b.number} — "${b.title}" [GENERATE]${anchorTag}`;
+        const c = BEAT_CONTRACTS[b.number as BeatNumber];
+        return `Beat ${b.number} — "${b.title}" [GENERATE]
+    purpose: ${c.purpose}
+    before → after: "${c.requiredChange.before}" → "${c.requiredChange.after}"${anchorTag}`;
       })
       .join('\n');
 
+    const expectedKeys = toGenerate.map((b) => b.number).join(', ');
+
     const prompt = `You are drafting a 12-beat story outline that reads as one continuous narrative, not 12 disconnected bullets. A reader should be able to read beats 1-12 in order and feel a single escalating arc.
 
-${storySpine ? `STORY SPINE (the causal backbone — every beat must honor it):\n${storySpine}\n\n` : ''}STORY BIBLE:
-${JSON.stringify(storyBible, null, 2)}
+${projectBlock(projectMeta)}${storySpine ? `STORY SPINE (the causal backbone — every beat must honor it):\n${storySpine}\n\n` : ''}STORY BIBLE:
+${JSON.stringify(storyBible)}
 
 BEAT MAP (CANON beats are fixed — write around them; GENERATE beats are yours; anchors marked ↳ MUST be the source material for that beat):
 ${beatSkeleton}
@@ -473,16 +565,24 @@ HARD RULES — each generated beat MUST:
 3. Use ${mainName} by name; do not re-introduce them.
 ${antagonistName ? `4. Reference ${antagonistName} or the main conflict ("${storyBible.conflict?.mainConflict ?? 'the conflict'}") where structurally appropriate.` : ''}
 5. Be 2-3 sentences. Specific. Concrete. Written with narrative momentum, not as a label.
-6. Respect the beat's narrative job (e.g. Beat 3 is the catalyst, Beat 10 is the lowest point, Beat 12 is resolution).
+6. Respect the beat's purpose and before→after change listed above for that beat.
 7. Never invalidate or restart a CANON beat.
+8. The returned "beats" object MUST contain ONLY these beat numbers: ${expectedKeys}. Do NOT include CANON beats; any extra keys will be discarded.
 
-TONE: Neutral — balanced, grounded. The user will regenerate individual beats later if they want a different direction.
+TONAL PALETTE: honor the FORMAT/GENRES/TONES at the top. Within that palette, write beats with a balanced default lean — the user will regenerate individual beats later if they want to push positive or negative.
 
-For each beat, also score:
-- intensity: emotional valence on a -10..10 scale. -10 = darkest/tragic, 0 = neutral, +10 = triumphant/hopeful.
-- tension: dramatic stakes on a 0..10 scale. 0 = calm, 5 = moderate stakes, 10 = life-or-death.
-A scene can be positive but high-tension (winning under pressure) or negative but low-tension (quiet sadness).
-Beat 10 (lowest point) typically lands between intensity -8 and -3 with tension 8-10. Beat 12 (resolution) typically lands at the user's chosen ending feeling.
+For each beat, score intensity (-10..10) and tension (0..10). Use this approximate arc shape as a guideline (these are ranges, not mandates — adjust to your story):
+- Beats 1-2: intensity 0..+3, tension 2..4 (ordinary world, establishing)
+- Beat 3 (catalyst): intensity -2..-5, tension 5..7 (problem lands)
+- Beat 4: intensity -3..-5, tension 6..8 (problem escalates)
+- Beat 5 (hard choice): intensity -1..+2, tension 6..8 (committed)
+- Beat 6: intensity -2..-4, tension 7..9 (consequences)
+- Beat 7 (things get messy): intensity -4..-7, tension 7..9
+- Beat 8: intensity -3..+2, tension 6..8 (resolve to continue)
+- Beat 9: intensity -5..-8, tension 8..10 (forces align)
+- Beat 10 (lowest point): intensity -8..-3, tension 8..10
+- Beat 11: intensity -3..+3, tension 5..7 (consequences settle)
+- Beat 12 (resolution): intensity should land on the user's chosen ending feeling (${storyBible.endingVibe || 'resolution'}); tension 1..4
 
 Return JSON:
 {
@@ -534,7 +634,7 @@ GUIDELINES:
     const prompt = `Analyze the story information and identify character hierarchy.
 
 STORY BIBLE:
-${JSON.stringify(storyBible, null, 2)}
+${JSON.stringify(storyBible)}
 
 QUESTION HISTORY:
 ${questionHistory.map((q) => `Q: ${q.question}\nA: ${q.answer}`).join('\n\n')}
@@ -660,9 +760,10 @@ export function generateUUID(): string {
   });
 }
 
-// Plot-event markers — if the extracted "want" contains these, it's almost
-// certainly a plot summary masquerading as a want, so we treat the pillar as
-// still open and ask the user.
+// Plot-event markers — if the value reads as a multi-clause plot summary
+// rather than a clean want/anchor, treat the pillar as still open.
+// Length-gated to avoid false-flagging short legitimate wants like
+// "to finally leave home" or "to be respected when they speak."
 const PLOT_MARKERS = [
   ' and later ',
   ' and then ',
@@ -671,12 +772,10 @@ const PLOT_MARKERS = [
   ' after ',
   ' in order to ',
   ' so that ',
-  ' eventually ',
-  ' finally ',
-  ' when they ',
 ];
 
-function looksLikePlot(s: string): boolean {
+export function looksLikePlot(s: string): boolean {
+  if (s.length <= 120) return false;
   const lower = s.toLowerCase();
   return PLOT_MARKERS.some((m) => lower.includes(m));
 }
@@ -814,19 +913,19 @@ export function buildPillarQuestionText(pillar: PillarKey, bible: Partial<StoryB
     // Phase 2 — Key Dramatic Moments. All grounded in protagonist name when known.
     case 'incitingMoment':
       return subject === 'your protagonist'
-        ? "What specifically pulls your main character into the story they can't avoid?"
-        : `What specifically pulls ${subject} into the story they can't avoid?`;
+        ? "What specifically pulls your main character into a story they can no longer avoid?"
+        : `What specifically pulls ${subject} into a story ${subject} can no longer avoid?`;
     case 'pointOfCommitment':
       return subject === 'your protagonist'
-        ? "What does your main character do that locks them in — the choice they can't take back?"
-        : `What does ${subject} do that locks them in — the choice they can't take back?`;
+        ? "What does your main character do that locks in the choice — one they can no longer take back?"
+        : `What does ${subject} do that locks in the choice — one ${subject} can no longer take back?`;
     case 'midpointTwist':
       return subject === 'your protagonist'
-        ? 'What major shift or revelation hits in the middle that changes everything they thought they knew?'
-        : `What major shift or revelation hits in the middle that changes everything ${subject} thought they knew?`;
+        ? 'What major shift or revelation hits in the middle that changes everything your main character believed?'
+        : `What major shift or revelation hits in the middle that changes everything ${subject} believed?`;
     case 'lowestPoint':
       return subject === 'your protagonist'
-        ? "What's their rock bottom — the moment when all hope feels lost?"
+        ? "What's your main character's rock bottom — the moment when all hope feels lost?"
         : `What's ${subject}'s rock bottom — the moment when all hope feels lost?`;
     case 'transformation':
       return subject === 'your protagonist'

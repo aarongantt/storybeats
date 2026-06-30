@@ -22,16 +22,64 @@ export interface UserPreferences {
   apiKey?: string;
 }
 
+/**
+ * True when an error from localStorage.setItem indicates a quota / capacity
+ * problem. Different browsers throw different DOMException names and codes.
+ */
+function isQuotaExceeded(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err instanceof DOMException) {
+    return (
+      err.name === 'QuotaExceededError' ||
+      err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      // Legacy IE / WebKit code.
+      (err as DOMException & { code?: number }).code === 22 ||
+      (err as DOMException & { code?: number }).code === 1014
+    );
+  }
+  return /quota|storage/i.test(err.message ?? '');
+}
+
 class LocalStorageService {
   // Project Management
-  saveProject(project: Project): void {
+  saveProject(project: Project): { ok: true } | { ok: false; reason: string } {
+    const tryWrite = (projects: Record<string, Project>) => {
+      localStorage.setItem(STORAGE_KEYS.PROJECT_LIST, JSON.stringify(projects));
+      localStorage.setItem(STORAGE_KEYS.CURRENT_PROJECT, project.id);
+    };
     try {
       const projects = this.getAllProjects();
       projects[project.id] = project;
-      localStorage.setItem(STORAGE_KEYS.PROJECT_LIST, JSON.stringify(projects));
-      localStorage.setItem(STORAGE_KEYS.CURRENT_PROJECT, project.id);
+      tryWrite(projects);
+      return { ok: true };
     } catch (error) {
-      console.error('Failed to save project:', error);
+      if (!isQuotaExceeded(error)) {
+        console.error('Failed to save project:', error);
+        return { ok: false, reason: 'Save failed (non-quota error).' };
+      }
+      // Try once more after evicting the oldest non-current project.
+      try {
+        const projects = this.getAllProjects();
+        const evictable = Object.values(projects)
+          .filter((p) => p.id !== project.id)
+          .sort(
+            (a, b) =>
+              new Date(a.metadata.updatedAt).getTime() -
+              new Date(b.metadata.updatedAt).getTime(),
+          );
+        if (evictable.length > 0) {
+          delete projects[evictable[0].id];
+          projects[project.id] = project;
+          tryWrite(projects);
+          return { ok: true };
+        }
+      } catch (retryError) {
+        console.error('Quota retry also failed:', retryError);
+      }
+      return {
+        ok: false,
+        reason: 'Browser storage is full. Older projects were evicted but the save still failed. Consider exporting your work.',
+      };
     }
   }
 

@@ -8,6 +8,8 @@ import { BeatCard } from '../components/BeatCard';
 import { StoryHeartbeat } from '../components/StoryHeartbeat';
 import { StoryHealthPanel } from '../components/StoryHealthPanel';
 import { openaiService } from '../services/ai/openaiService';
+import { toFriendlyError, type FriendlyError } from '../services/ai/errorMapping';
+import { ErrorBanner } from '../components/ErrorBanner';
 import { calculateStoryHealth } from '../utils/storyHealth';
 import type { Beat, StoryHealth } from '../types/story';
 
@@ -19,6 +21,7 @@ export default function TimelineBuilderScreen() {
   const [spineEditing, setSpineEditing] = useState(false);
   const [spineDraft, setSpineDraft] = useState('');
   const [spineLoading, setSpineLoading] = useState(false);
+  const [aiError, setAiError] = useState<FriendlyError | null>(null);
 
   // Calculate story health when beats change
   useEffect(() => {
@@ -55,32 +58,27 @@ export default function TimelineBuilderScreen() {
 
   const storySpine = state.currentProject.timeline.storySpine;
 
-  const handleFinishItForMe = async () => {
-    if (!state.currentProject) return;
+  // Used to disable the Finish-It button when nothing is left to draft.
+  const needsFilling = beats.some(
+    (b) => !b.locked && (!b.summary || b.status === 'empty' || b.status === 'incomplete'),
+  );
 
-    // Short-circuit: nothing to do if every beat is locked or complete.
-    const needsFilling = beats.some(
-      (b) => !b.locked && (!b.summary || b.status === 'empty' || b.status === 'incomplete'),
-    );
-    if (!needsFilling) {
-      dispatch({
-        type: 'SET_ERROR',
-        payload: 'All beats are already complete or locked. Unlock or clear a beat to regenerate it.',
-      });
-      setTimeout(() => dispatch({ type: 'SET_ERROR', payload: null }), 4000);
-      return;
-    }
+  const handleFinishItForMe = async () => {
+    if (!state.currentProject || !needsFilling) return;
 
     setAutoCompleting(true);
+    setAiError(null);
     try {
+      const meta = {
+        format: state.currentProject.format,
+        genres: state.currentProject.genres,
+        tones: state.currentProject.tones,
+      };
       // Ensure we have a spine for continuity. Generate one if missing.
       let spine = state.currentProject.timeline.storySpine;
       if (!spine) {
         try {
-          spine = await openaiService.generateStorySpine(
-            state.currentProject.storyBible,
-            state.currentProject.format,
-          );
+          spine = await openaiService.generateStorySpine(state.currentProject.storyBible, meta);
           dispatch({
             type: 'UPDATE_PROJECT',
             payload: {
@@ -96,20 +94,25 @@ export default function TimelineBuilderScreen() {
         beats,
         state.currentProject.storyBible,
         spine,
+        meta,
       );
 
       const applied = Object.keys(completions).length;
       if (applied === 0) {
-        dispatch({
-          type: 'SET_ERROR',
-          payload: 'The AI returned no usable beats. Try again, or regenerate a single beat from its card.',
+        setAiError({
+          message: 'The AI returned no usable beats. Try again, or regenerate a single beat from its card.',
+          canRetry: true,
         });
-        setTimeout(() => dispatch({ type: 'SET_ERROR', payload: null }), 5000);
         return;
       }
 
       for (const [beatNumber, data] of Object.entries(completions)) {
         const num = parseInt(beatNumber, 10);
+        // Defense in depth: never overwrite a locked/canon beat even if the
+        // model returns one. autoCompleteBeats also asks the model not to,
+        // but we trust nothing.
+        const target = state.currentProject?.timeline.beats.find((b) => b.number === num);
+        if (!target || target.locked || target.status === 'complete') continue;
         const emotionalData =
           data.intensity !== undefined && data.tension !== undefined
             ? {
@@ -141,7 +144,7 @@ export default function TimelineBuilderScreen() {
       }
     } catch (error) {
       console.error('Error auto-completing story:', error);
-      dispatch({ type: 'SET_ERROR', payload: 'Failed to auto-complete story. Please try again.' });
+      setAiError(toFriendlyError(error));
     } finally {
       setAutoCompleting(false);
     }
@@ -150,11 +153,13 @@ export default function TimelineBuilderScreen() {
   const handleRegenerateSpine = async () => {
     if (!state.currentProject) return;
     setSpineLoading(true);
+    setAiError(null);
     try {
-      const spine = await openaiService.generateStorySpine(
-        state.currentProject.storyBible,
-        state.currentProject.format,
-      );
+      const spine = await openaiService.generateStorySpine(state.currentProject.storyBible, {
+        format: state.currentProject.format,
+        genres: state.currentProject.genres,
+        tones: state.currentProject.tones,
+      });
       dispatch({
         type: 'UPDATE_PROJECT',
         payload: {
@@ -164,7 +169,7 @@ export default function TimelineBuilderScreen() {
       setSpineDraft(spine);
     } catch (error) {
       console.error('Error regenerating spine:', error);
-      dispatch({ type: 'SET_ERROR', payload: 'Failed to regenerate story spine.' });
+      setAiError(toFriendlyError(error));
     } finally {
       setSpineLoading(false);
     }
@@ -235,14 +240,24 @@ export default function TimelineBuilderScreen() {
               onChange={(e) => setSpineDraft(e.target.value)}
               rows={5}
               placeholder="5-7 sentences describing the causal arc of your story…"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && spineDraft.trim()) {
+                  e.preventDefault();
+                  handleSaveSpine();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setSpineEditing(false);
+                }
+              }}
             />
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <Button size="sm" onClick={handleSaveSpine} disabled={!spineDraft.trim()}>
                 Save
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setSpineEditing(false)}>
                 Cancel
               </Button>
+              <span className="ml-2 text-xs text-slate-500">⌘/Ctrl+Enter to save · Esc to cancel</span>
             </div>
           </div>
         ) : storySpine ? (
@@ -284,6 +299,11 @@ export default function TimelineBuilderScreen() {
                 .slice(beat.number)
                 .filter((b) => b.status === 'complete' && b.summary)}
               storySpine={storySpine}
+              projectMeta={{
+                format: state.currentProject!.format,
+                genres: state.currentProject!.genres,
+                tones: state.currentProject!.tones,
+              }}
               onUpdate={(updates) => handleUpdateBeat(beat.number, updates)}
               isExpanded={expandedBeat === beat.number}
               onToggleExpand={() => handleToggleExpand(beat.number)}
@@ -298,26 +318,38 @@ export default function TimelineBuilderScreen() {
       )}
 
       <div className="flex flex-col gap-3 sticky bottom-4 bg-slate-900/90 backdrop-blur-sm rounded-xl p-4 border border-white/10">
-        {completeness < 100 && (
+        {aiError && (
+          <ErrorBanner
+            error={aiError}
+            onRetry={() => {
+              setAiError(null);
+              handleFinishItForMe();
+            }}
+            onDismiss={() => setAiError(null)}
+          />
+        )}
+        {needsFilling && (
           <Button
             variant="outline"
             onClick={handleFinishItForMe}
-            disabled={autoCompleting}
+            disabled={autoCompleting || !needsFilling}
             fullWidth
             className="border-cosmic-500/50 text-cosmic-300 hover:bg-cosmic-900/30"
           >
             {autoCompleting ? '✨ Auto-completing...' : '✨ Finish It For Me (AI)'}
           </Button>
         )}
-        <Button
-          onClick={handleContinue}
-          disabled={completeness < 50}
-          fullWidth
-        >
-          {completeness >= 50 ? 'Continue →' : `Complete ${Math.ceil((50 - completeness) / 8.33)} more beats`}
+        <Button onClick={handleContinue} disabled={completeness < 50} fullWidth>
+          {(() => {
+            if (completeness >= 50) return 'Continue →';
+            const beatsNeeded = Math.max(0, 6 - completedBeats);
+            return `Complete ${beatsNeeded} more beat${beatsNeeded === 1 ? '' : 's'}`;
+          })()}
         </Button>
         <p className="text-xs text-center text-slate-400">
-          {completeness < 100 ? 'Click "Finish It For Me" to auto-complete all empty beats' : 'All beats complete!'}
+          {!needsFilling
+            ? 'All beats complete or locked. Unlock or clear a beat to regenerate it.'
+            : 'Click "Finish It For Me" to auto-complete all empty beats'}
         </p>
       </div>
     </Container>

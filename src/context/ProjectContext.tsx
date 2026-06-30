@@ -203,14 +203,25 @@ export function deepMergeStoryBible(
     ];
   }
 
-  // Merge theme - prefer non-empty values, combine if both exist
+  // Merge theme — tokenize, dedupe (case-insensitive), recombine. Avoids
+  // "dark, dark, hopeful, dark" snowball when the user re-answers the tone
+  // pillar multiple times.
   if (updates.theme) {
-    if (current.theme && current.theme !== updates.theme) {
-      // If both exist and differ, combine them
-      merged.theme = `${current.theme}, ${updates.theme}`;
-    } else {
-      merged.theme = updates.theme;
+    const toTokens = (s: string) =>
+      s
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of [...toTokens(current.theme || ''), ...toTokens(updates.theme)]) {
+      const key = t.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(t);
+      }
     }
+    merged.theme = out.length ? out.join(', ') : undefined;
   }
 
   // Simple property updates
@@ -220,28 +231,8 @@ export function deepMergeStoryBible(
   if (updates.midpointShift) merged.midpointShift = updates.midpointShift;
   if (updates.lowestPoint) merged.lowestPoint = updates.lowestPoint;
   if (updates.transformation) merged.transformation = updates.transformation;
-
-  // Handle any additional dynamic properties
-  Object.keys(updates).forEach((key) => {
-    if (
-      ![
-        'protagonist',
-        'world',
-        'conflict',
-        'characters',
-        'secondaryCharacters',
-        'theme',
-        'turningPoint',
-        'endingVibe',
-        'inciting',
-        'midpointShift',
-        'lowestPoint',
-        'transformation',
-      ].includes(key)
-    ) {
-      (merged as any)[key] = (updates as any)[key];
-    }
-  });
+  // (No catch-all anymore — StoryBible no longer has an `[key]: any` index
+  // signature. Add new known fields explicitly above.)
 
   return merged;
 }
@@ -313,7 +304,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
             userWritten: false,
             locked: false,
             status: 'empty' as const,
-            alternativeVersions: [],
             metadata: {
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),

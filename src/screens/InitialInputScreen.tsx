@@ -33,7 +33,6 @@ export default function InitialInputScreen() {
     if (!input.trim()) return;
 
     setLoading(true);
-    dispatch({ type: 'SET_LOADING', payload: true });
 
     try {
       // Create a new project (this also resets interview state).
@@ -78,7 +77,6 @@ export default function InitialInputScreen() {
       });
     } finally {
       setLoading(false);
-      dispatch({ type: 'SET_LOADING', payload: false });
     }
   };
 
@@ -97,7 +95,14 @@ export default function InitialInputScreen() {
           rows={8}
           disabled={loading}
           className="text-lg"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && input.trim()) {
+              e.preventDefault();
+              handleContinue();
+            }
+          }}
         />
+        <p className="mt-2 text-xs text-slate-500">⌘/Ctrl+Enter to continue</p>
 
         <div className="mt-6 flex justify-between items-center">
           <Button
